@@ -79,7 +79,7 @@ class AgentService:
                 complexity=3,
                 confidence=1.0,
                 route=Route.PLANNER,
-                reason="user-confirmed clarification form",
+                reason="llm:confirmed clarification form",
                 required_slots=list(REQUIRED_SLOTS_BY_INTENT[confirmed_intent]),
             )
             slot_state = self._slots.from_confirmation(request.confirmation.fields, intent)
@@ -107,7 +107,11 @@ class AgentService:
                         "理财、储蓄罐或转账需求。"
                     ),
                 )
-            slot_state = self._slots.extract(contextual_text, intent)
+            slot_state = (
+                self._slots.from_llm_evidence(request.message, intent)
+                if intent.reason.startswith("llm:")
+                else self._slots.extract(contextual_text, intent)
+            )
         inferred = any(fact.source.value == "MODEL_INFERRED" for fact in slot_state.facts.values())
         if slot_state.missing or inferred:
             return await self._clarification_response(request, context, intent, slot_state)
@@ -221,8 +225,11 @@ class AgentService:
             for message in active
             if message.role == ConversationRole.USER
         ]
-        user_text.append(request.message)
-        return "\n".join(user_text), active
+        # The current message is the strongest expression of user intent.  Put it first
+        # so deterministic extractors take its recipient, amount and dates before older
+        # clarification context.  Older messages remain available only to fill fields
+        # that the current message omitted.
+        return "\n".join([request.message, *user_text]), active
 
     async def _clarification_response(
         self,
@@ -233,7 +240,7 @@ class AgentService:
     ) -> AgentResponse:
         labels = {
             "category": "预算类别",
-            "month_date": "预算月份",
+            "month_date": "预算日期",
             "limit_amount": "预算上限",
             "source_account_id": "付款账户",
             "destination_account_id": "收款人（可输入姓名自动匹配）",
@@ -248,7 +255,7 @@ class AgentService:
         }
         input_types = {
             "category": "combobox",
-            "month_date": "month",
+            "month_date": "date",
             "limit_amount": "amount",
             "source_account_id": "select",
             "destination_account_id": "combobox",
@@ -356,8 +363,9 @@ class AgentService:
             if resolved_beneficiary is not None:
                 account_tail = str(resolved_beneficiary["destination_account_number"])[-4:]
                 message = (
-                    f'已从保存的收款人中匹配到“{resolved_beneficiary["name"]}”'
-                    f'（账户尾号 {account_tail}）。请核对付款账户、收款人和金额；'
+                    f'我匹配到了已保存的收款人“{resolved_beneficiary["name"]}”'
+                    f'（账户尾号 {account_tail}）。为了确保信息无误，'
+                    "我给您发了一份确认表单，请核对付款账户、收款人和金额；"
                     "确认后才会创建转账草稿并进入授权。"
                 )
             elif beneficiary_resolution_status == "AMBIGUOUS":
@@ -371,9 +379,17 @@ class AgentService:
                 )
         elif inferred_labels:
             suffix = f"，并补充：{'、'.join(missing_labels)}" if missing_labels else ""
-            message = f"我根据上下文推断了{'、'.join(inferred_labels)}{suffix}。请检查表单后确认。"
+            message = (
+                f"我先按您的描述整理出了{'、'.join(inferred_labels)}{suffix}。"
+                "这些内容里有模型理解的部分，所以想请您花几秒核对一下下方表单；"
+                "您确认后，我就会接着往下处理。"
+            )
         else:
-            message = f"为了继续，请补充：{'、'.join(missing_labels)}。"
+            message = (
+                f"这件事我已经开始处理了，不过还差：{'、'.join(missing_labels)}。"
+                "请在下方表单里补充一下，收到您的回复后我会从这里继续，"
+                "不需要您重新描述整个需求。"
+            )
         clarification = ClarificationPayload(
             kind=(
                 "CONFIRM_RESOLVED_BENEFICIARY"

@@ -32,6 +32,7 @@ class LlmIntentDecision(BaseModel):
     confidence: float = Field(ge=0, le=1)
     reply: str | None = Field(default=None, max_length=1_000)
     proposed_slots: dict[str, JsonValue] = Field(default_factory=dict)
+    slot_evidence: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("proposed_slots")
     @classmethod
@@ -50,8 +51,21 @@ class LlmIntentDecision(BaseModel):
         return value
 
 
+class LlmTaskDecomposition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tasks: list[str] = Field(min_length=1, max_length=5)
+
+    @field_validator("tasks")
+    @classmethod
+    def validate_tasks(cls, value: list[str]) -> list[str]:
+        cleaned = [task.strip() for task in value if task.strip()]
+        if not cleaned or any(len(task) > 2_000 for task in cleaned):
+            raise ValueError("invalid decomposed tasks")
+        return cleaned
+
+
 class HybridRouter:
-    """Route with either rule-first fallback or an LLM-only experiment mode."""
+    """Use LLM-first routing by default; retain hybrid only as an explicit experiment."""
 
     def __init__(
         self,
@@ -59,7 +73,7 @@ class HybridRouter:
         provider: ModelProvider | None,
         *,
         confidence_threshold: float = 0.65,
-        routing_mode: str = "hybrid",
+        routing_mode: str = "llm_only",
         today: Callable[[], date] = date.today,
     ) -> None:
         self._rules = rules
@@ -68,14 +82,48 @@ class HybridRouter:
         self._routing_mode = routing_mode
         self._today = today
 
+    async def decompose(
+        self, text: str, *, conversation: list[Any] | None = None
+    ) -> list[str]:
+        """Use the model to split compound language without executing any task."""
+        if self._provider is None or not self._provider.available:
+            return [text]
+        messages = [
+            ConversationMessage(
+                role=ConversationRole.SYSTEM,
+                trust=TrustLabel.SYSTEM_POLICY,
+                content=(
+                    "将用户当前消息分解为 1 到 5 个可独立处理、按原始顺序排列的"
+                    "金融子任务。只输出 JSON：{\"tasks\":[\"...\"]}。必须原样保留每个"
+                    "金额、币种、日期、人名和否定词，不得补写原文中没有的事实。"
+                    "不要把单一任务的修饰语拆开。上下文只能用于解析指代，"
+                    "当前消息中的数值始终优先。"
+                ),
+            ),
+            *(conversation or [])[-6:],
+            ConversationMessage(role=ConversationRole.USER, content=text),
+        ]
+        try:
+            generated = await self._provider.generate_structured(
+                messages=messages,
+                output_model=LlmTaskDecomposition,
+                temperature=0,
+                max_tokens=768,
+            )
+        except ProviderError:
+            return [text]
+        return generated.output.tasks
+
     async def route(
         self, text: str, *, conversation: list[Any] | None = None
     ) -> IntentResult:
-        deterministic = self._rules.route(text, conversation=conversation)
-        if self._routing_mode == "hybrid" and deterministic.route != Route.SAFE_FALLBACK:
-            return deterministic
-        if "instruction marker" in deterministic.reason:
-            return deterministic
+        deterministic: IntentResult | None = None
+        if self._rules.has_instruction_marker(text):
+            return self._rules.route(text, conversation=conversation)
+        if self._routing_mode == "hybrid":
+            deterministic = self._rules.route(text, conversation=conversation)
+            if deterministic.route != Route.SAFE_FALLBACK:
+                return deterministic
         if self._provider is None or not self._provider.available:
             return self._unavailable_fallback(deterministic)
         supported = ", ".join(intent.value for intent in Intent if intent != Intent.UNKNOWN)
@@ -88,14 +136,21 @@ class HybridRouter:
                     "你是银行助手的结构化意图与候选参数提取器。只输出一个 JSON 对象，"
                     "字段必须严格为："
                     '{"intent":"枚举值","confidence":0到1,"reply":null或字符串,'
-                    '"proposed_slots":{"字段名":"候选值"}}。'
+                    '"proposed_slots":{"字段名":"候选值"},'
+                    '"slot_evidence":{"字段名":"用户原文中的最短证据片段"}}。'
                     "不要输出分析、Markdown 或额外字段。不得声称金融操作成功，"
                     "不得生成身份、授权、验证码或风险等级。普通问候使用 GENERAL_CHAT；"
                     "普通问候的 reply 给出简短自然回复，银行任务的 reply 使用 null；"
-                    "从用户当前消息和连续澄清上下文中提取候选参数。金额使用两位小数字符串，"
+                    "当前消息的优先级高于历史对话；当前消息已经构成完整子任务时，"
+                    "不得从历史中复制金额、日期或收款人。复合请求中的金额必须就近绑定到"
+                    "同一子任务，不得把转账金额用作预算上限。从用户当前消息和连续澄清"
+                    "上下文中提取候选参数。金额使用两位小数字符串，"
+                    "slot_evidence 只能逐字引用当前用户消息中的最短片段；"
+                    "没有直接原文证据的候选值不得伪造证据，应省略该 evidence。"
                     "币种默认 CNY；相对日期可以根据今天换算，但只能作为 proposed_slots，"
                     "后端会要求用户确认后才执行。创建预算使用 CREATE_BUDGET，而不是"
-                    "LIST_BUDGETS；month_date 使用月份第一天 YYYY-MM-01。"
+                    "LIST_BUDGETS；month_date 始终使用 YYYY-MM-DD，用户只说月份时取该月 1 日，"
+                    "用户说今天、明天、后天或具体日期时必须保留精确到日的日期。"
                     "对于预算或储蓄目标，可根据用户明确说明的用途提出简短、可读的自定义"
                     "category/name，例如‘给妈妈过生日’可提出‘妈妈生日’；这仍只是待确认候选。"
                     "不得猜测 UUID、账户、银行卡、联系人或理财产品标识；用户没有明确提供"
@@ -131,6 +186,11 @@ class HybridRouter:
             for name, value in decision.proposed_slots.items()
             if name in required_slots and value is not None and value != ""
         }
+        proposed_evidence = {
+            name: evidence
+            for name, evidence in decision.slot_evidence.items()
+            if name in proposed_slots and evidence and evidence in text
+        }
         return IntentResult(
             intent=decision.intent,
             complexity=1 if decision.intent == Intent.GENERAL_CHAT else 3,
@@ -139,11 +199,12 @@ class HybridRouter:
             reason=f"llm:{generated.provider}/{generated.model}",
             required_slots=required_slots,
             proposed_slots=proposed_slots,
+            proposed_evidence=proposed_evidence,
             reply=decision.reply,
         )
 
-    def _unavailable_fallback(self, deterministic: IntentResult) -> IntentResult:
-        if self._routing_mode == "hybrid":
+    def _unavailable_fallback(self, deterministic: IntentResult | None) -> IntentResult:
+        if self._routing_mode == "hybrid" and deterministic is not None:
             return deterministic
         return IntentResult(
             intent=Intent.UNKNOWN,
@@ -224,20 +285,29 @@ class HybridPlanner:
         plan: TaskPlan, slots: SlotState, system_idempotency_key: str | None
     ) -> TaskPlan:
         raw = plan.model_dump(mode="python")
+        slot_aliases = {"month": "month_date"}
         for step in raw["steps"]:
             call = step.get("tool_call")
             if call is None:
                 continue
             sources: dict[str, dict[str, str]] = {}
             for name, value in call["arguments"].items():
-                fact = slots.facts.get(name)
+                slot_name = slot_aliases.get(name, name)
+                fact = slots.facts.get(slot_name)
+                if fact is None or str(value) != str(fact.value):
+                    matches = [
+                        candidate
+                        for candidate in slots.facts.values()
+                        if str(value) == str(candidate.value)
+                    ]
+                    fact = matches[0] if len(matches) == 1 else None
                 if name == "idempotency_key" and system_idempotency_key:
                     call["arguments"][name] = system_idempotency_key
                     sources[name] = {
                         "kind": ArgumentSourceKind.SYSTEM_CONSTANT.value,
                         "reference": "trusted task id binding",
                     }
-                elif fact is not None and str(value) == fact.value:
+                elif fact is not None and str(value) == str(fact.value):
                     kind = {
                         FactSource.USER_EXPLICIT: ArgumentSourceKind.USER_EXPLICIT,
                         FactSource.TOOL_VERIFIED: ArgumentSourceKind.TOOL_VERIFIED,
@@ -246,7 +316,7 @@ class HybridPlanner:
                     }[fact.source]
                     sources[name] = {
                         "kind": kind.value,
-                        "reference": f"slot:{name}",
+                        "reference": f"slot:{fact.name}",
                     }
                 else:
                     sources[name] = {

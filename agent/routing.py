@@ -80,6 +80,7 @@ class IntentResult(BaseModel):
     reason: str
     required_slots: list[str] = Field(default_factory=list)
     proposed_slots: dict[str, JsonValue] = Field(default_factory=dict)
+    proposed_evidence: dict[str, str] = Field(default_factory=dict)
     reply: str | None = None
 
 
@@ -94,6 +95,12 @@ class RuleRouter:
         "绕过审批",
         "伪造授权",
     )
+
+    @classmethod
+    def has_instruction_marker(cls, text: str) -> bool:
+        """Fast safety screening only; this does not classify business intent."""
+        normalized = re.sub(r"\s+", "", text).lower()
+        return any(marker in normalized for marker in cls._INJECTION_MARKERS)
 
     @staticmethod
     def _result(
@@ -119,8 +126,7 @@ class RuleRouter:
     ) -> IntentResult:
         del conversation
         normalized = re.sub(r"\s+", "", text).lower()
-        injected = any(marker in normalized for marker in self._INJECTION_MARKERS)
-        if injected:
+        if self.has_instruction_marker(text):
             return self._result(
                 Intent.UNKNOWN,
                 route=Route.SAFE_FALLBACK,
@@ -159,7 +165,7 @@ class RuleRouter:
         if any(word in normalized for word in ("消费", "支出", "花费")):
             return self._result(Intent.ANALYZE_SPENDING, required_slots=["year", "month"])
         if "预算" in normalized:
-            if any(word in normalized for word in ("创建", "新增", "设置")):
+            if any(word in normalized for word in ("创建", "新增", "设置", "预留")):
                 return self._result(
                     Intent.CREATE_BUDGET,
                     route=Route.PLANNER,

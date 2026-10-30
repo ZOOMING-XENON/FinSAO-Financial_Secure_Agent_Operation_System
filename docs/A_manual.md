@@ -68,13 +68,13 @@ Keep chat controls clear of navigation, submit buttons and the on-screen keyboar
 | Money（金额） | Decimal strings, e.g. `"800.00"` | Send strings; preserve cents; use a decimal library for arithmetic |
 | Currency（币种） | `CNY`, `USD`, `EUR` | Never add different currencies together without an explicit conversion API |
 | Integer（整数） | JSON number, e.g. `50` | Pagination, year/month, assessment answers; not monetary values |
-| Date（日期） | `YYYY-MM-DD` | Budget `month` must be the first day, e.g. `2026-10-01` |
+| Date（日期） | `YYYY-MM-DD` | Budget `month` stores an exact date; month-only agent input is normalized to day 1 |
 | Timestamp（时间戳） | ISO 8601 with offset, e.g. `2026-10-23T04:30:00Z` | Send timezone-aware values; accept `Z` or `+00:00`; display in user locale |
 | Boolean（布尔值） | `true` / `false` | Never send `"true"` or `"false"` |
 | Null（空值） | `null` | Different from absent, `"null"`, `""`, `0` and `[]` |
 | Enum（枚举） | Exact uppercase identifier | Localize labels, not wire values; allow unknown-value display fallback |
 
-Daily transfer policy and budget month boundaries use `Asia/Shanghai`. Use fixed two-decimal strings in request/display conventions; responses remain decimal strings and should be normalized for display without converting to binary floating point. Transfer/wealth amount schemas allow up to 18 digits in total and two fractional digits. Monetary mutations require positive amounts.
+Daily transfer policy and relative budget dates use `Asia/Shanghai`. Use fixed two-decimal strings in request/display conventions; responses remain decimal strings and should be normalized for display without converting to binary floating point. Transfer/wealth amount schemas allow up to 18 digits in total and two fractional digits. Monetary mutations require positive amounts.
 
 Required fields must be present. Omit unused optional query filters rather than sending `"null"` or an empty string. Send only documented mutation fields; the current PATCH routes update the explicit fields shown below and are not generic merge-patch endpoints.
 

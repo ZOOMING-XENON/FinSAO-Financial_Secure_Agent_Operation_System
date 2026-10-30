@@ -23,11 +23,19 @@ test('serves the app and routes Core and Agent independently', async t => {
   const script = source.match(/<script>([\s\S]*)<\/script>/)?.[1];
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));
+  assert.doesNotMatch(source, /function splitCompoundTasks/);
+  assert.match(source, /agentApi\('\/decompose'/);
+  assert.doesNotMatch(
+    source.match(/function submitClarification\(id\)\{[^\n]+\}/)?.[0] ?? '',
+    /ai\.transferIntent|source_account_id} to account/,
+  );
 
   const coreResponse = await fetch(`http://127.0.0.1:${frontendPort}/api/core/accounts?limit=2`);
   assert.deepEqual(await coreResponse.json(), { name: 'core', method: 'GET', url: '/accounts?limit=2', body: '', authorization: 'Bearer core-fixture' });
   const agentResponse = await fetch(`http://127.0.0.1:${frontendPort}/api/agent/requests`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"message":"x"}' });
   assert.deepEqual(await agentResponse.json(), { name: 'agent', method: 'POST', url: '/agent/requests', body: '{"message":"x"}', authorization: 'Bearer agent-fixture' });
+  const decomposition = await fetch(`http://127.0.0.1:${frontendPort}/api/agent/decompose`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"message":"x"}' });
+  assert.deepEqual(await decomposition.json(), { name: 'agent', method: 'POST', url: '/agent/decompose', body: '{"message":"x"}', authorization: 'Bearer agent-fixture' });
   const openApi = await fetch(`http://127.0.0.1:${frontendPort}/api/agent/openapi.json`);
   assert.deepEqual(await openApi.json(), { name: 'agent', method: 'GET', url: '/openapi.json', body: '', authorization: 'Bearer agent-fixture' });
   assert.equal((await fetch(`http://127.0.0.1:${frontendPort}/unknown`)).status, 404);

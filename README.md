@@ -61,10 +61,10 @@ Node 代理分别为 Core 和 Agent 注入服务端令牌，并覆盖浏览器�
 
 1. 前端发送当前消息、会话 UUID 和有限的对话历史。
 2. Agent 在调用模型前检查密码、验证码、CVV、完整卡号和明显的提示注入。
-3. 当前开发配置为 `AGENT_ROUTING_MODE=llm_only`，LLM 返回严格 JSON，例如 `CREATE_BUDGET` 和候选参数。
-4. `SlotTracker` 单独从用户原文提取金额等显式事实，并记录每个值的来源：用户明确输入、工具验证、系统常量或模型推断。
-5. “妈妈生日”和“下个月”可以作为模型推断值预填，但不能直接用于金融写操作；前端必须展示确认表单。
-6. 用户确认后，前端发送结构化 `confirmation`；这些字段被标记为用户明确确认，不再二次进入 LLM，从而避免重复弹表单。随后确定性 Planner 生成 DAG，`CapabilityBroker` 和 `PlanVerifier` 检查工具、参数来源、依赖关系和权限。
+3. 默认配置为 `AGENT_ROUTING_MODE=llm_only`；普通业务文本不先进入 `RuleRouter`，LLM 直接返回严格 JSON：`intent + confidence + proposed_slots + slot_evidence`。
+4. `SlotTracker` 不再使用业务关键词决定 LLM 路径的语义；它只验证模型引用的证据是否确实出现在当前用户原文中，并标记用户明确输入、工具验证、系统常量或模型推断等来源。
+5. “妈妈生日”和“下个月”可以作为模型推断值预填；没有可验证原文证据的金融参数不能直接执行，必须由用户确认。
+6. 用户确认后，前端发送结构化 `confirmation`；这些字段被标记为用户明确确认。随后 LLM 在最小 Tool Schema 集合内提出候选 DAG，`CapabilityBroker` 和 `PlanVerifier` 确定性检查工具、参数来源、依赖关系和权限；模型规划不可用时只能回退到基于已确认数据的确定性计划。
 7. `ToolGateway` 用 Pydantic Schema 校验参数，通过 HTTP 调用 Banking Core。
 8. Banking Core 独立检查身份、资源所有权、风险、审批、MFA、幂等和业务状态，然后在数据库事务中执行。
 9. Agent 的最终回答只能根据真实 `ToolResult` 生成，不能仅凭 LLM 文本声称“创建成功”或“转账成功”。
@@ -344,7 +344,7 @@ API 错误统一为 `{ "code": "...", "message": "..." }`。金额在 JSON 中�
 | `hybrid.py` | `llm_only`/`hybrid` 路由、结构化 LLM 意图输出和 LLM 候选 Planner |
 | `providers.py` | DeepSeek、Qwen、本地 OpenAI-compatible Provider 与错误/重试封装 |
 | `factory.py` | 根据配置创建对应模型 Provider，避免上层依赖厂商细节 |
-| `context.py` | `SlotTracker`；提取金额、日期、UUID、收款人等，并记录事实来源 |
+| `context.py` | `SlotTracker`；在 LLM 主路径验证候选值的原文证据与事实来源，并为对照实验保留确定性提取器 |
 | `capabilities.py` | `CapabilityBroker`；按 Intent 和执行阶段提供最小 Tool action 集合 |
 | `planning.py` | 确定性 Baseline Planner 和 PlanVerifier，验证 DAG、参数来源和工具权限 |
 | `service.py` | 单次 Agent 主流程；组织路由、slot、候选查询、表单、计划、执行和响应 |

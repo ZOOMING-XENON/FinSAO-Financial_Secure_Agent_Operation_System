@@ -13,7 +13,7 @@ class AgentSettings(BaseSettings):
 
     app_env: str = "development"
     model_provider: Literal["offline", "deepseek", "qwen", "local"] = "offline"
-    agent_routing_mode: Literal["hybrid", "llm_only"] = "hybrid"
+    agent_routing_mode: Literal["hybrid", "llm_only"] = "llm_only"
     model_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     model_max_retries: int = Field(default=2, ge=0, le=5)
 

@@ -20,7 +20,12 @@ from agent.capabilities import CapabilityBroker
 from agent.checkpoints import AsyncFromSyncPostgresSaver
 from agent.config import AgentSettings, get_agent_settings
 from agent.context import SlotTracker
-from agent.contracts import AgentRequest, AgentResponse, TrustedAgentContext
+from agent.contracts import (
+    AgentRequest,
+    AgentResponse,
+    TaskDecompositionResponse,
+    TrustedAgentContext,
+)
 from agent.durable import DurableEvent, DurableTask, DurableTaskManager, ResumeRequest
 from agent.factory import build_model_provider
 from agent.graph import build_runtime_agent_graph
@@ -49,10 +54,11 @@ _registry = ToolRegistry()
 register_default_tools(_registry, _banking_client)
 _model_provider = build_model_provider(_settings)
 _gateway = ToolGateway(_registry)
+_router = HybridRouter(
+    RuleRouter(), _model_provider, routing_mode=_settings.agent_routing_mode
+)
 _service = AgentService(
-    router=HybridRouter(
-        RuleRouter(), _model_provider, routing_mode=_settings.agent_routing_mode
-    ),
+    router=_router,
     slots=SlotTracker(),
     planner=HybridPlanner(BaselinePlanner(), _model_provider),
     verifier=PlanVerifier(_registry),
@@ -90,6 +96,10 @@ app = FastAPI(title="FinPilot Agent API", version="0.1.0", lifespan=lifespan)
 
 def get_agent_service() -> AgentService:
     return _service
+
+
+def get_agent_router() -> HybridRouter:
+    return _router
 
 
 def get_task_manager() -> DurableTaskManager:
@@ -141,6 +151,16 @@ async def create_agent_request(
         trace_id=trace_id,
     )
     return await service.handle(request, context)
+
+
+@app.post("/agent/decompose", response_model=TaskDecompositionResponse)
+async def decompose_agent_request(
+    request: AgentRequest,
+    router: Annotated[HybridRouter, Depends(get_agent_router)],
+    _: Annotated[UUID, Depends(get_trusted_user_id)],
+) -> TaskDecompositionResponse:
+    tasks = await router.decompose(request.message, conversation=request.conversation)
+    return TaskDecompositionResponse(tasks=tasks)
 
 
 @app.post("/agent/tasks", response_model=DurableTask)

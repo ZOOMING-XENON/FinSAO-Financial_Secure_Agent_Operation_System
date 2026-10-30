@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 from unittest.mock import Mock
 from uuid import uuid4
@@ -87,6 +88,36 @@ def test_slot_tracker_records_only_explicit_financial_values() -> None:
     assert state.facts["amount"].value == "800.00"
     assert state.facts["currency"].value == "CNY"
     assert set(state.missing) == {"source_account_id", "destination_account_id"}
+
+
+def test_slot_tracker_supports_amount_before_beneficiary_without_currency_suffix() -> None:
+    result = RuleRouter().route("帮我转账200给妈妈")
+    state = SlotTracker().extract("帮我转账200给妈妈", result)
+
+    assert state.facts["amount"].value == "200.00"
+    assert state.facts["currency"].value == "CNY"
+    assert state.facts["beneficiary_query"].value == "妈妈"
+
+
+def test_budget_slots_bind_amount_and_relative_date_to_current_subtask() -> None:
+    text = "帮我预留100的预算给后天的晚餐"
+    result = RuleRouter().route(text)
+    state = SlotTracker(today=lambda: date(2026, 10, 30)).extract(text, result)
+
+    assert result.intent == Intent.CREATE_BUDGET
+    assert state.facts["category"].value == "DINING"
+    assert state.facts["month_date"].value == "2026-11-01"
+    assert state.facts["limit_amount"].value == "100.00"
+    assert state.facts["currency"].value == "CNY"
+    assert state.missing == []
+
+
+def test_budget_month_without_day_defaults_to_first_day() -> None:
+    text = "创建2026年11月餐饮预算，限额100元"
+    result = RuleRouter().route(text)
+    state = SlotTracker(today=lambda: date(2026, 10, 30)).extract(text, result)
+
+    assert state.facts["month_date"].value == "2026-11-01"
 
 
 def test_capability_broker_never_exposes_commit_or_card_loss_for_transfer_planning() -> None:

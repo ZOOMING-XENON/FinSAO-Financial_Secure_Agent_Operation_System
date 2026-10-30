@@ -26,9 +26,16 @@ class SafeResponseGenerator:
             "unknown",
         )
         if status == AgentResponseStatus.WAITING_APPROVAL:
-            return "计划和草稿已由 Banking Core 验证，必须完成审批后才能继续。"
+            return (
+                "我已经把这项操作整理好了，Banking Core 也完成了草稿校验。"
+                "为了保护您的资金安全，还需要您在安全界面确认或完成验证；"
+                "在此之前不会发生实际资金变动。"
+            )
         if status == AgentResponseStatus.FAILED:
-            return "Banking Core 未确认操作成功。"
+            return (
+                "这次操作还没有得到 Banking Core 的成功确认，"
+                "所以我不会把它说成已完成。您可以根据页面上的错误提示检查信息后再试一次。"
+            )
         counts = {
             "get_accounts": "个账户",
             "list_cards": "张银行卡",
@@ -41,5 +48,12 @@ class SafeResponseGenerator:
         if tool_name in counts and isinstance(data, dict):
             items = data.get("accounts", data.get("items", []))
             if isinstance(items, list):
-                return f"已从 Banking Core 查询到 {len(items)} {counts[tool_name]}。"
-        return "操作结果已由 Banking Core 返回；展示内容只使用已验证的工具结果。"
+                return (
+                    f"已经帮您查到 {len(items)} {counts[tool_name]}。"
+                    "下面展示的是 Banking Core 返回的实际结果，"
+                    "我没有补写或猜测其中的金融数据。"
+                )
+        return (
+            "这一步已经处理完成。下面的内容来自 Banking Core "
+            "返回并校验过的结果，金额、日期和状态都不是由对话模型自行生成的。"
+        )

@@ -121,8 +121,8 @@ class BudgetService:
     def create(
         self, user_id: UUID, category: str, month: date, limit: Decimal, currency: Currency
     ) -> BudgetModel:
-        if month.day != 1 or limit <= 0:
-            raise ConflictError("budget month must be its first day and limit must be positive")
+        if limit <= 0:
+            raise ConflictError("budget limit must be positive")
         budget = BudgetModel(
             id=uuid4(),
             user_id=user_id,

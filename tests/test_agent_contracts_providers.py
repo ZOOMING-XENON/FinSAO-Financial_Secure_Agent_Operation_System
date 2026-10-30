@@ -242,6 +242,7 @@ async def test_local_provider_needs_model_but_not_cloud_key() -> None:
 def test_settings_support_explicit_offline_and_unavailable_qwen() -> None:
     offline = AgentSettings(_env_file=None, model_provider="offline")
     assert build_model_provider(offline) is None
+    assert offline.agent_routing_mode == "llm_only"
     qwen_settings = AgentSettings(
         _env_file=None,
         model_provider="qwen",

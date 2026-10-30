@@ -103,6 +103,10 @@ class AgentRequest(StrictContract):
         return SensitiveDataGuard.ensure_safe(value)
 
 
+class TaskDecompositionResponse(StrictContract):
+    tasks: Annotated[list[str], Field(min_length=1, max_length=5)]
+
+
 class TrustedAgentContext:
     """Server-only context. Never deserialize this object from AgentRequest/model output."""
 

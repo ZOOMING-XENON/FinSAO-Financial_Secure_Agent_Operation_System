@@ -90,7 +90,8 @@ class ClarificationGateway:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.arguments: dict[str, dict[str, Any]] = {}
-        self.destination_id = uuid4()
+        self.destination_ids = {"妈妈": uuid4(), "爸爸": uuid4()}
+        self.destination_id = self.destination_ids["妈妈"]
 
     async def execute(
         self, *, tool_name: str, arguments: dict[str, Any], context: ExecutionContext
@@ -128,7 +129,13 @@ class ClarificationGateway:
                             "destination_account_number": "DEMO0301000001",
                             "name": "妈妈",
                             "nickname": None,
-                        }
+                        },
+                        {
+                            "destination_account_id": str(self.destination_ids["爸爸"]),
+                            "destination_account_number": "DEMO0301000002",
+                            "name": "爸爸",
+                            "nickname": None,
+                        },
                     ]
                 ),
             )
@@ -137,15 +144,19 @@ class ClarificationGateway:
                 status: str
                 matches: list[dict[str, Any]]
 
+            query = str(arguments["query"])
+            destination_id = self.destination_ids.get(query, self.destination_id)
             return ToolResult(
                 status=ToolResultStatus.SUCCESS,
                 data=Resolution(
                     status="RESOLVED",
                     matches=[
                         {
-                            "destination_account_id": str(self.destination_id),
-                            "destination_account_number": "DEMO0301000001",
-                            "name": "妈妈",
+                            "destination_account_id": str(destination_id),
+                            "destination_account_number": (
+                                "DEMO0301000002" if query == "爸爸" else "DEMO0301000001"
+                            ),
+                            "name": query,
                             "nickname": None,
                         }
                     ],
@@ -183,6 +194,53 @@ async def test_llm_fallback_handles_general_chat_without_tool_execution() -> Non
 
 
 @pytest.mark.asyncio
+async def test_llm_only_business_request_does_not_invoke_semantic_rule_router() -> None:
+    class RejectBusinessRuleRouter(RuleRouter):
+        def route(
+            self, text: str, *, conversation: list[Any] | None = None
+        ) -> IntentResult:
+            del text, conversation
+            raise AssertionError("semantic business rules must not run in llm_only mode")
+
+    router = HybridRouter(
+        RejectBusinessRuleRouter(),
+        FakeModelProvider(
+            {
+                "intent": "CREATE_BUDGET",
+                "confidence": 0.99,
+                "reply": None,
+                "proposed_slots": {},
+                "slot_evidence": {},
+            }
+        ),
+    )
+
+    result = await router.route("请帮我安排一个晚餐预算")
+
+    assert result.intent == Intent.CREATE_BUDGET
+    assert result.reason.startswith("llm:")
+
+
+@pytest.mark.asyncio
+async def test_llm_decomposes_compound_request_without_keyword_splitter() -> None:
+    router = HybridRouter(
+        RuleRouter(),
+        FakeModelProvider(
+            {
+                "tasks": [
+                    "帮我预留100的预算给后天的晚餐",
+                    "给妈妈转账20元",
+                ]
+            }
+        ),
+    )
+
+    tasks = await router.decompose("帮我预留100的预算给后天的晚餐，并且给妈妈转账20元")
+
+    assert tasks == ["帮我预留100的预算给后天的晚餐", "给妈妈转账20元"]
+
+
+@pytest.mark.asyncio
 async def test_llm_candidate_dag_is_still_verified() -> None:
     candidate = TaskPlan.model_validate(
         {
@@ -215,6 +273,62 @@ async def test_llm_candidate_dag_is_still_verified() -> None:
     register_default_tools(registry, Mock())
     verified = PlanVerifier(registry).verify(plan, {"cards.list"})
     assert verified.ordered_step_ids == ("list_cards",)
+
+
+@pytest.mark.asyncio
+async def test_llm_budget_dag_binds_tool_month_to_confirmed_date_slot() -> None:
+    candidate = TaskPlan.model_validate(
+        {
+            "goal": "创建晚餐预算",
+            "steps": [
+                {
+                    "step_id": "create_budget",
+                    "purpose": "创建已确认预算",
+                    "tool_call": {
+                        "tool_name": "create_budget",
+                        "arguments": {
+                            "category": "DINING",
+                            "month": "2026-11-02",
+                            "limit_amount": "100.00",
+                            "currency": "CNY",
+                        },
+                    },
+                    "argument_sources": {},
+                }
+            ],
+        }
+    )
+    intent = IntentResult(
+        intent=Intent.CREATE_BUDGET,
+        complexity=2,
+        confidence=1,
+        route=Route.PLANNER,
+        reason="llm:confirmed clarification form",
+        required_slots=["category", "month_date", "limit_amount", "currency"],
+    )
+    slots = SlotTracker().from_confirmation(
+        {
+            "category": "DINING",
+            "month_date": "2026-11-02",
+            "limit_amount": "100.00",
+            "currency": "CNY",
+        },
+        intent,
+    )
+    planner = HybridPlanner(BaselinePlanner(), FakeModelProvider(candidate))
+
+    plan = await planner.create(
+        intent,
+        slots,
+        request=AgentRequest(session_id=uuid4(), message="用户已确认表单。"),
+        allowed_tools=[],
+    )
+
+    source = plan.steps[0].argument_sources["month"]
+    assert source.reference == "slot:month_date"
+    registry = ToolRegistry()
+    register_default_tools(registry, Mock())
+    PlanVerifier(registry).verify(plan, {"budget.create"})
 
 
 @pytest.mark.asyncio
@@ -325,7 +439,8 @@ async def test_transfer_clarification_returns_account_and_contact_choices() -> N
         _trusted_context(session_id),
     )
     assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
-    assert "匹配到“妈妈”" in response.message
+    assert "收款人“妈妈”" in response.message
+    assert "确认表单" in response.message
     assert isinstance(response.result, dict)
     clarification = response.result["clarification"]
     assert isinstance(clarification, dict)
@@ -339,6 +454,51 @@ async def test_transfer_clarification_returns_account_and_contact_choices() -> N
     assert clarification["kind"] == "CONFIRM_RESOLVED_BENEFICIARY"
     assert gateway.calls == ["get_accounts", "resolve_beneficiary", "list_beneficiaries"]
     assert gateway.arguments["resolve_beneficiary"] == {"query": "妈妈"}
+
+
+@pytest.mark.asyncio
+async def test_current_transfer_message_overrides_stale_clarification_values() -> None:
+    registry = ToolRegistry()
+    register_default_tools(registry, Mock())
+    gateway = ClarificationGateway()
+    service = AgentService(
+        router=RuleRouter(),
+        slots=SlotTracker(),
+        planner=BaselinePlanner(),
+        verifier=PlanVerifier(registry),
+        capabilities=CapabilityBroker(registry),
+        gateway=gateway,
+    )
+    session_id = uuid4()
+    response = await service.handle(
+        AgentRequest(
+            session_id=session_id,
+            message="给爸爸转账788元",
+            conversation=[
+                ConversationMessage(
+                    role=ConversationRole.USER,
+                    content="给妈妈转账500元",
+                ),
+                ConversationMessage(
+                    role=ConversationRole.ASSISTANT,
+                    content="[CLARIFICATION] 请检查转账信息",
+                ),
+            ],
+        ),
+        _trusted_context(session_id),
+    )
+
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert "收款人“爸爸”" in response.message
+    assert gateway.arguments["resolve_beneficiary"] == {"query": "爸爸"}
+    assert isinstance(response.result, dict)
+    clarification = response.result["clarification"]
+    assert isinstance(clarification, dict)
+    fields = {item["name"]: item for item in clarification["fields"]}
+    assert fields["amount"]["value"] == "788.00"
+    assert fields["destination_account_id"]["value"] == str(
+        gateway.destination_ids["爸爸"]
+    )
 
 
 @pytest.mark.asyncio
@@ -418,7 +578,23 @@ async def test_followup_uses_active_clarification_context_and_requires_confirmat
         router=HybridRouter(
             RuleRouter(),
             FakeModelProvider(
-                {"intent": "CREATE_SAVINGS_POT", "confidence": 0.99, "reply": None}
+                {
+                    "intent": "CREATE_SAVINGS_POT",
+                    "confidence": 0.99,
+                    "reply": None,
+                    "proposed_slots": {
+                        "name": "妈妈生日",
+                        "target_amount": "1000.00",
+                        "target_date": "2026-10-31",
+                        "currency": "CNY",
+                    },
+                    "slot_evidence": {
+                        "name": "妈妈生日",
+                        "target_amount": "1000元",
+                        "target_date": "2026.10.31",
+                        "currency": "1000元",
+                    },
+                }
             ),
         ),
         slots=SlotTracker(),
@@ -459,7 +635,7 @@ async def test_followup_uses_active_clarification_context_and_requires_confirmat
     confirmed = await service.handle(
         AgentRequest(
             session_id=session_id,
-            message="创建一个妈妈生日储蓄罐，目标金额1000元，目标日期2026-10-31",
+                message="创建一个妈妈生日储蓄罐，目标金额1000元，目标日期2026.10.31",
         ),
         _trusted_context(session_id),
     )
@@ -480,7 +656,7 @@ def test_agent_contract_rejects_secrets_before_llm_boundary() -> None:
 
 
 @pytest.mark.asyncio
-async def test_budget_clarification_supports_custom_category_and_month_picker() -> None:
+async def test_budget_clarification_supports_custom_category_and_date_picker() -> None:
     service, gateway = build_service()
     session_id = uuid4()
     clarification_response = await service.handle(
@@ -494,13 +670,13 @@ async def test_budget_clarification_supports_custom_category_and_month_picker() 
     fields = {item["name"]: item for item in clarification["fields"]}
     assert fields["category"]["input_type"] == "combobox"
     assert fields["category"]["options"]
-    assert fields["month_date"]["input_type"] == "month"
+    assert fields["month_date"]["input_type"] == "date"
     assert gateway.calls == []
 
     confirmed = await service.handle(
         AgentRequest(
             session_id=session_id,
-            message="创建预算：类别 Demo Travel Fund，月份 2026-10-01，限额 1000 元",
+            message="创建预算：类别 Demo Travel Fund，日期 2026-10-18，限额 1000 元",
         ),
         _trusted_context(session_id),
     )
@@ -511,7 +687,7 @@ async def test_budget_clarification_supports_custom_category_and_month_picker() 
     assert call.tool_name == "create_budget"
     assert call.arguments == {
         "category": "Demo Travel Fund",
-        "month": "2026-10-01",
+        "month": "2026-10-18",
         "limit_amount": "1000.00",
         "currency": "CNY",
     }
@@ -533,6 +709,10 @@ async def test_llm_only_routing_proposes_budget_fields_without_tool_execution() 
                 "month_date": "2026-11-01",
                 "limit_amount": "1000.00",
                 "currency": "CNY",
+            },
+            "slot_evidence": {
+                "limit_amount": "1000元",
+                "currency": "1000元",
             },
         }
     )

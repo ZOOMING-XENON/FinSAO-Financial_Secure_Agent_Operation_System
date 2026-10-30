@@ -2,6 +2,13 @@
 
 **Status / 状态:** Implemented on 2026-10-26
 
+> Current architecture note (Q7, 2026-10-30): this document records the P2
+> deterministic baseline. Production/default natural-language routing is now
+> `llm_only`: RuleRouter no longer classifies ordinary business text and remains only
+> as a safety screen plus an explicit `hybrid` experiment baseline. LLM candidates
+> must carry quoted user evidence and still pass CapabilityBroker, PlanVerifier and
+> Banking Core checks.
+
 ## English Summary
 
 P2 delivers a single-turn vertical slice: a conservative rule router, provenance-aware

@@ -6,7 +6,13 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from agent.app import app, get_agent_service, get_task_store, get_trusted_user_id
+from agent.app import (
+    app,
+    get_agent_router,
+    get_agent_service,
+    get_task_store,
+    get_trusted_user_id,
+)
 from agent.config import AgentSettings
 from agent.contracts import AgentResponse, AgentResponseStatus, TrustedAgentContext
 from agent.durable import DurableEvent
@@ -26,6 +32,30 @@ class CapturingService:
             message="verified fixture",
             result={"source": "banking-core-fixture"},
         )
+
+
+class DecompositionRouter:
+    async def decompose(self, text: str, *, conversation=None):  # type: ignore[no-untyped-def]
+        del text, conversation
+        return ["创建100元晚餐预算", "给妈妈转账20元"]
+
+
+def test_agent_decomposition_endpoint_uses_llm_router() -> None:
+    app.dependency_overrides[get_agent_router] = lambda: DecompositionRouter()
+    app.dependency_overrides[get_trusted_user_id] = lambda: uuid4()
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/agent/decompose",
+                json={
+                    "session_id": str(uuid4()),
+                    "message": "创建晚餐预算，并给妈妈转账20元",
+                },
+            )
+        assert response.status_code == 200
+        assert response.json()["tasks"] == ["创建100元晚餐预算", "给妈妈转账20元"]
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_agent_api_uses_server_identity_and_rejects_extra_identity_field() -> None:
