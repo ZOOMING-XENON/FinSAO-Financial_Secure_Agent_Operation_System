@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Aegis</string>
+    <string name="title_activity_main">Aegis</string>
+    <string name="package_name">com.anda.aegis</string>
+    <string name="custom_url_scheme">com.anda.aegis</string>
+</resources>
