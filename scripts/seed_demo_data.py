@@ -41,9 +41,7 @@ ModelT = TypeVar("ModelT", bound=Identified)
 SEED_NAMESPACE = uuid5(NAMESPACE_URL, "https://example.invalid/mock-banking-core/v1")
 UTC = UTC
 
-# Fictional destination accounts for demonstrating a first-time transfer.  They are
-# deliberately not pre-saved as Lin's beneficiaries: the user must enter the name and
-# account number once, after which the normal beneficiary flow can remember the match.
+# Fictional saved recipients used to demonstrate natural-language beneficiary resolution.
 DEMO_RECIPIENTS: tuple[tuple[str, str, str], ...] = (
     ("father", "爸爸", "299000000001"),
     ("mother", "妈妈", "390000000002"),
@@ -210,6 +208,19 @@ def seed(session: Session) -> None:
                 ],
             ),
         )
+        for recipient_key, recipient_name, _ in DEMO_RECIPIENTS:
+            add_once(
+                session,
+                BeneficiaryModel(
+                    id=stable_id(f"beneficiary:{user_key}:{recipient_key}"),
+                    user_id=stable_id(f"user:{user_key}"),
+                    name=recipient_name,
+                    nickname=None,
+                    destination_account_id=stable_id(
+                        f"account:demo-recipient:{recipient_key}"
+                    ),
+                ),
+            )
 
     # Opening capital and all historical activity are represented by balanced postings.
     for user_number, (user_key, _, _, _) in enumerate(users):

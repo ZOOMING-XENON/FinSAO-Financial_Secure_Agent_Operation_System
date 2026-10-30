@@ -89,12 +89,15 @@ class ReconciliationGateway:
 class ClarificationGateway:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.arguments: dict[str, dict[str, Any]] = {}
+        self.destination_id = uuid4()
 
     async def execute(
         self, *, tool_name: str, arguments: dict[str, Any], context: ExecutionContext
     ) -> ToolResult[Any]:
-        del arguments, context
+        del context
         self.calls.append(tool_name)
+        self.arguments[tool_name] = arguments
         if tool_name == "get_accounts":
             class Accounts(BaseModel):
                 accounts: list[dict[str, Any]]
@@ -121,12 +124,31 @@ class ClarificationGateway:
                 data=Beneficiaries(
                     beneficiaries=[
                         {
-                            "destination_account_id": str(uuid4()),
+                            "destination_account_id": str(self.destination_id),
                             "destination_account_number": "DEMO0301000001",
-                            "name": "Friend",
-                            "nickname": "Friend",
+                            "name": "妈妈",
+                            "nickname": None,
                         }
                     ]
+                ),
+            )
+        if tool_name == "resolve_beneficiary":
+            class Resolution(BaseModel):
+                status: str
+                matches: list[dict[str, Any]]
+
+            return ToolResult(
+                status=ToolResultStatus.SUCCESS,
+                data=Resolution(
+                    status="RESOLVED",
+                    matches=[
+                        {
+                            "destination_account_id": str(self.destination_id),
+                            "destination_account_number": "DEMO0301000001",
+                            "name": "妈妈",
+                            "nickname": None,
+                        }
+                    ],
                 ),
             )
         raise AssertionError(tool_name)
@@ -299,11 +321,11 @@ async def test_transfer_clarification_returns_account_and_contact_choices() -> N
     )
     session_id = uuid4()
     response = await service.handle(
-        AgentRequest(session_id=session_id, message="帮我给 Friend 转账10000元"),
+        AgentRequest(session_id=session_id, message="帮我给妈妈转账10000元"),
         _trusted_context(session_id),
     )
     assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
-    assert "UUID" in response.message
+    assert "匹配到“妈妈”" in response.message
     assert isinstance(response.result, dict)
     clarification = response.result["clarification"]
     assert isinstance(clarification, dict)
@@ -311,10 +333,12 @@ async def test_transfer_clarification_returns_account_and_contact_choices() -> N
     assert fields["source_account_id"]["options"]
     assert (
         fields["destination_account_id"]["options"][0]["label"]
-        == "Friend（Friend） · 尾号 0001"
+        == "妈妈 · 尾号 0001"
     )
     assert fields["destination_account_id"]["value"] is not None
-    assert gateway.calls == ["get_accounts", "list_beneficiaries"]
+    assert clarification["kind"] == "CONFIRM_RESOLVED_BENEFICIARY"
+    assert gateway.calls == ["get_accounts", "resolve_beneficiary", "list_beneficiaries"]
+    assert gateway.arguments["resolve_beneficiary"] == {"query": "妈妈"}
 
 
 @pytest.mark.asyncio

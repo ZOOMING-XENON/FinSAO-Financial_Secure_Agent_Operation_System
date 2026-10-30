@@ -258,6 +258,8 @@ class AgentService:
             "target_amount": "amount",
         }
         options: dict[str, list[ClarificationOption]] = {}
+        resolved_beneficiary: dict[str, Any] | None = None
+        beneficiary_resolution_status: str | None = None
         if intent.intent == Intent.CREATE_BUDGET:
             options["category"] = [
                 ClarificationOption(value=label, label=f"{label}（{value}）")
@@ -292,6 +294,27 @@ class AgentService:
                     for item in payload.get("accounts", [])
                     if item.get("status") == "ACTIVE"
                 ]
+            query = slots.facts.get("beneficiary_query")
+            if query is not None and "destination_account_id" not in slots.facts:
+                resolution = await self._gateway.execute(
+                    tool_name="resolve_beneficiary",
+                    arguments={"query": str(query.value)},
+                    context=execution_context,
+                )
+                if resolution.status == ToolResultStatus.SUCCESS and resolution.data is not None:
+                    resolution_payload = resolution.data.model_dump(mode="json")
+                    beneficiary_resolution_status = str(resolution_payload.get("status", ""))
+                    matches = resolution_payload.get("matches", [])
+                    if beneficiary_resolution_status == "RESOLVED" and len(matches) == 1:
+                        resolved_beneficiary = matches[0]
+                        slots.facts["destination_account_id"] = SlotFact(
+                            "destination_account_id",
+                            str(resolved_beneficiary["destination_account_id"]),
+                            FactSource.TOOL_VERIFIED,
+                        )
+                        slots.missing = [
+                            name for name in slots.missing if name != "destination_account_id"
+                        ]
             beneficiaries = await self._gateway.execute(
                 tool_name="list_beneficiaries",
                 arguments={},
@@ -311,24 +334,6 @@ class AgentService:
                     )
                     for item in items
                 ]
-                query = slots.facts.get("beneficiary_query")
-                if query is not None and "destination_account_id" not in slots.facts:
-                    normalized = str(query.value).strip().lower()
-                    matches = [
-                        item
-                        for item in items
-                        if str(item["name"]).lower() == normalized
-                        or str(item.get("nickname") or "").lower() == normalized
-                    ]
-                    if len(matches) == 1:
-                        slots.facts["destination_account_id"] = SlotFact(
-                            "destination_account_id",
-                            str(matches[0]["destination_account_id"]),
-                            FactSource.TOOL_VERIFIED,
-                        )
-                        slots.missing = [
-                            name for name in slots.missing if name != "destination_account_id"
-                        ]
         field_names = list(dict.fromkeys([*intent.required_slots, *slots.facts.keys()]))
         field_names = [name for name in field_names if name != "beneficiary_query"]
         fields = [
@@ -348,14 +353,35 @@ class AgentService:
         inferred_labels = [field.label for field in fields if field.inferred]
         missing_labels = [labels.get(name, name.replace("_", " ")) for name in slots.missing]
         if intent.intent == Intent.TRANSFER:
-            message = "请选择付款账户，并输入或选择以前保存的收款人；系统不会要求你复制内部 UUID。"
+            if resolved_beneficiary is not None:
+                account_tail = str(resolved_beneficiary["destination_account_number"])[-4:]
+                message = (
+                    f'已从保存的收款人中匹配到“{resolved_beneficiary["name"]}”'
+                    f'（账户尾号 {account_tail}）。请核对付款账户、收款人和金额；'
+                    "确认后才会创建转账草稿并进入授权。"
+                )
+            elif beneficiary_resolution_status == "AMBIGUOUS":
+                message = "找到多个同名收款人，请核对账户尾号后选择；确认前不会转账。"
+            elif beneficiary_resolution_status == "NOT_FOUND":
+                message = "未在已保存的收款人中找到该名称，请从列表选择或先添加收款人。"
+            else:
+                message = (
+                    "请选择付款账户，并输入或选择以前保存的收款人；"
+                    "系统不会要求你复制内部 UUID。"
+                )
         elif inferred_labels:
             suffix = f"，并补充：{'、'.join(missing_labels)}" if missing_labels else ""
             message = f"我根据上下文推断了{'、'.join(inferred_labels)}{suffix}。请检查表单后确认。"
         else:
             message = f"为了继续，请补充：{'、'.join(missing_labels)}。"
         clarification = ClarificationPayload(
-            kind="CONFIRM_INFERRED" if inferred_labels else "MISSING_FIELDS",
+            kind=(
+                "CONFIRM_RESOLVED_BENEFICIARY"
+                if resolved_beneficiary is not None
+                else "CONFIRM_INFERRED"
+                if inferred_labels
+                else "MISSING_FIELDS"
+            ),
             intent=intent.intent.value,
             fields=fields,
         )

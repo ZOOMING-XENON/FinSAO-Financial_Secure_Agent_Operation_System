@@ -212,7 +212,7 @@ class ClarificationField(StrictContract):
 
 
 class ClarificationPayload(StrictContract):
-    kind: Literal["MISSING_FIELDS", "CONFIRM_INFERRED"]
+    kind: Literal["MISSING_FIELDS", "CONFIRM_INFERRED", "CONFIRM_RESOLVED_BENEFICIARY"]
     intent: str
     fields: list[ClarificationField]
 

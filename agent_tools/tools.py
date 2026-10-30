@@ -89,7 +89,7 @@ class ResolveBeneficiaryOutput(BaseModel):
 class ListBeneficiariesTool(BaseBankingTool[EmptyInput, BeneficiariesOutput]):
     name, description, action, risk_policy = (
         "list_beneficiaries",
-        "List saved transfer beneficiaries",
+        "List saved transfer beneficiaries with names, nicknames and destination accounts",
         "beneficiaries.list",
         "GREEN",
     )
@@ -223,7 +223,7 @@ class GetTransactionsTool(BaseBankingTool[TransactionsInput, TransactionsOutput]
 class ResolveBeneficiaryTool(BaseBankingTool[ResolveBeneficiaryInput, ResolveBeneficiaryOutput]):
     name, description, action, risk_policy = (
         "resolve_beneficiary",
-        "Resolve an exact beneficiary name",
+        "Match a saved beneficiary by name or nickname and return the verified destination account",
         "beneficiaries.resolve",
         "GREEN",
     )
