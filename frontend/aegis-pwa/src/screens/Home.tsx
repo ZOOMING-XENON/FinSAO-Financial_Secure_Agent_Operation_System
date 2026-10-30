@@ -6,6 +6,7 @@ import { formatMoney, fromCents, percent, toCents } from '../core/money';
 import { go, useApp, useLoad } from '../app/state';
 import { Amount, Icon, potArt, Skeleton } from '../ui/kit';
 import { TxRow } from '../ui/TxRow';
+import { loadFreeToSave } from './Pot';
 
 export interface AccountWithBalance extends Account {
   balance: string;
@@ -36,6 +37,7 @@ export function Home() {
     if (!latest) return null;
     return { budget: latest, status: await api.get<BudgetStatus>(`/budgets/${latest.id}/status`) };
   });
+  const room = useLoad(loadFreeToSave);
   const [slide, setSlide] = useState(0);
 
   const active = (subs.data ?? []).filter(s => s.active);
@@ -152,6 +154,9 @@ export function Home() {
 
       <div className="card-h" style={{ padding: '10px 4px 8px' }}>
         <h3>{t('home.pots')}</h3>
+        {room.data && toCents(room.data.setAside) > 0n && (
+          <span className="mut small">{t('home.setAside', { aside: formatMoney(room.data.setAside), free: formatMoney(room.data.free) })}</span>
+        )}
       </div>
       <div className="pots">
         {(pots.data ?? []).map(p => (

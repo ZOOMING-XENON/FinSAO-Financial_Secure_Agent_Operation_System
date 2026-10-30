@@ -288,6 +288,7 @@ label.f { display: block; font-size: 13px; color: var(--muted); margin: 12px 2px
 .composer input:focus { border-color: var(--brand); }
 .composer .icon-btn { width: 52px; height: 52px; }
 .composer .icon-btn.on { background: var(--red); color: #fff; }
+.voice-lang { flex: none; min-width: 40px; height: 40px; padding: 0 8px; border-radius: 999px; background: var(--surface-2); color: var(--ink); font-weight: 700; font-size: 13px; }
 main.chat { padding-bottom: calc(var(--tabs-h) + env(safe-area-inset-bottom) + 90px); }
 
 /* Me */

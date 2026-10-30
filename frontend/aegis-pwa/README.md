@@ -132,4 +132,6 @@ server.mjs    static server + token-adding proxy + CORS allowlist for native app
 
 - **Incoming vs outgoing money**: Banking Core doesn't mark rows as debit or credit, so direction is inferred from the category (`src/core/format.ts`).
 - **Agent in English**: with `MODEL_PROVIDER=offline`, the agent's rule-based router only understands Chinese phrasing (e.g. 查询余额). Connect an LLM provider in `.env` for free-form English.
+- **Savings pots are virtual in the backend**: adding money to a pot (`POST /savings-pots/{id}/contributions`) doesn't deduct it from any account, doesn't check the balance, and has no approval tier. The app works around this: it shows "set aside · free" on Home, explains on the add sheet that nothing is moved, and blocks amounts above the free total (all balances minus all pots). That is a front-end check only. A real fix needs Banking Core to either move money to a savings account, or check the balance server-side and add a `savings.contribute` policy tier, so large amounts go through the shield like transfers.
+- **Voice**: the browser's speech recognition hears one language at a time. The 中/EN button next to the mic switches it, separately from the app's language.
 - **App store icons and splash screens**: still the Capacitor defaults. Generate them from `public/icons/icon.svg` with `@capacitor/assets`.

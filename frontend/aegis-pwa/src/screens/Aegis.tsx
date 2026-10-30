@@ -15,7 +15,7 @@ interface Msg {
 }
 
 // Chat lives in memory only for this app session; nothing is persisted.
-const session = { id: uid(), messages: [] as Msg[], history: [] as ConversationMessage[], pending: '' };
+const session = { id: uid(), messages: [] as Msg[], history: [] as ConversationMessage[], pending: '', voiceLang: '' as '' | 'zh-CN' | 'en-US' };
 
 export function askAegis(text: string) {
   session.pending = text;
@@ -62,6 +62,14 @@ export function Aegis() {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
+  // Speech recognition hears one language at a time; it starts as the UI language and the user can switch it.
+  const [voiceLang, setVoiceLang] = useState<'zh-CN' | 'en-US'>(session.voiceLang || (lang === 'zh' ? 'zh-CN' : 'en-US'));
+  const switchVoiceLang = () => {
+    const next = voiceLang === 'zh-CN' ? 'en-US' : 'zh-CN';
+    session.voiceLang = next;
+    setVoiceLang(next);
+    if (listening) recRef.current?.stop();
+  };
   const endRef = useRef<HTMLDivElement>(null);
   const recRef = useRef<{ stop: () => void } | null>(null);
 
@@ -258,7 +266,7 @@ export function Aegis() {
       return;
     }
     const rec = new Rec();
-    rec.lang = locale;
+    rec.lang = voiceLang;
     rec.interimResults = true;
     rec.onresult = e => setText(Array.from(e.results).map(r => r[0].transcript).join(''));
     rec.onend = () => setListening(false);
@@ -316,6 +324,9 @@ export function Aegis() {
       >
         <button type="button" className={'icon-btn' + (listening ? ' on' : '')} onClick={toggleVoice} aria-label={t('aegis.listen')}>
           <Icon name="i-mic" />
+        </button>
+        <button type="button" className="voice-lang" onClick={switchVoiceLang} aria-label={t('aegis.voiceLang')} title={t('aegis.voiceLang')}>
+          {voiceLang === 'zh-CN' ? '中' : 'EN'}
         </button>
         <input value={text} onChange={e => setText(e.target.value)} placeholder={t('aegis.placeholder')} aria-label={t('aegis.placeholder')} maxLength={2000} enterKeyHint="send" lang={lang === 'zh' ? 'zh-CN' : 'en'} />
         <button type="submit" className="icon-btn brand" disabled={busy || !text.trim()} aria-label={t('aegis.placeholder')}>

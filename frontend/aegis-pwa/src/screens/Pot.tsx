@@ -6,6 +6,19 @@ import { formatMoney, fromCents, isValidAmount, normalizeAmount, percent, toCent
 import { go, useApp, useLoad } from '../app/state';
 import { Amount, Icon, potArt, Sheet, Skeleton } from '../ui/kit';
 import { askAegis } from './Aegis';
+import { loadAccounts } from './Home';
+
+/**
+ * Pots are virtual in Banking Core: money is set aside, not moved, and the backend does not
+ * check balances. So the app treats "free" money as total balance minus everything in pots.
+ */
+export async function loadFreeToSave(): Promise<{ free: string; setAside: string }> {
+  const [accounts, pots] = await Promise.all([loadAccounts(), api.get<SavingsPot[]>('/savings-pots')]);
+  const total = accounts.reduce((sum, a) => sum + toCents(a.balance), 0n);
+  const setAside = pots.reduce((sum, p) => sum + toCents(p.saved_amount), 0n);
+  const free = total - setAside;
+  return { free: fromCents(free > 0n ? free : 0n), setAside: fromCents(setAside) };
+}
 
 const ceilDiv = (a: bigint, b: bigint) => (b <= 0n ? a : (a + b - 1n) / b);
 
@@ -218,6 +231,7 @@ function Calculator({ pot, months }: { pot: SavingsPot; months: number }) {
 
 function AddToPot({ pot, open, onClose, onSaved }: { pot: SavingsPot; open: boolean; onClose: () => void; onSaved: () => void }) {
   const { t, errorText, refresh } = useApp();
+  const room = useLoad(loadFreeToSave, [open]);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [msg, setMsg] = useState('');
@@ -226,6 +240,7 @@ function AddToPot({ pot, open, onClose, onSaved }: { pot: SavingsPot; open: bool
   const save = async () => {
     if (!isValidAmount(amount)) return setMsg(t('pay.invalidAmount'));
     const value = normalizeAmount(amount);
+    if (room.data && toCents(value) > toCents(room.data.free)) return setMsg(t('pot.overFree', { amount: formatMoney(room.data.free) }));
     const sig = value + '|' + note;
     if (intent.current?.sig !== sig) intent.current = { sig, key: 'pot-contribution-' + uid() };
     setBusy(true);
@@ -246,6 +261,8 @@ function AddToPot({ pot, open, onClose, onSaved }: { pot: SavingsPot; open: bool
   return (
     <Sheet open={open} onClose={onClose} label={t('pot.addTitle', { name: pot.name })}>
       <h3>{t('pot.addTitle', { name: pot.name })}</h3>
+      <p className="sub">{t('pot.addHint')}</p>
+      {room.data && <p className="small" style={{ fontWeight: 600, margin: '0 2px' }}>{t('pot.free', { amount: formatMoney(room.data.free) })}</p>}
       <label className="f" htmlFor="pa">
         {t('pot.amount')}
       </label>
