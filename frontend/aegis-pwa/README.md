@@ -8,13 +8,15 @@ The mobile front end for FinSAO, built as a **React + TypeScript PWA**. The same
 
 | Tab | What it does | Backend |
 |---|---|---|
-| **Home** | Illustrated header with a greeting, swipeable balance cards, quick tiles (send, track spending, start a pot, calendar), a People grid, an "Ask Aegis" bar, a budget "shield check", activity and savings pots | `/accounts`, `/balance`, `/transactions`, `/subscriptions`, `/budgets/{id}/status`, `/savings-pots` |
-| **Trends** | A month calendar showing money out (darker = bigger day) and money in per day; tap a day for its transactions. Below: spending by category and budgets with forecasts | `/analytics/monthly-summary`, `/budgets` |
-| **Aegis** (centre) | Agent chat with a voice orb. It shows clarification forms, plan steps, and approvals for actions | Agent `/agent/tasks`, `/agent/tasks/{id}/resume` |
+| **Home** | Total balance on a soft colour background, swipeable account cards, quick actions (send, scan receipt, start a pot), **For you** reminders, the Ask Aegis bar, a People row and recent activity | `/accounts`, `/balance`, `/transactions`, `/budgets`, `/subscriptions`, `/savings-pots` |
+| **Insights** | The money dashboard: spent / income / net, reminders, a button to the **spending calendar**, spending pace vs last month and budget, an under-budget streak, budgets with "left per day", a category donut, 6-month cash flow, top merchants, and subscriptions you can cancel | `/budgets/{id}/status`, `/subscriptions/{id}/cancel`, transactions |
+| **Spending calendar** | Month grid with money out (darker = bigger day) and money in per day; tap a day for its transactions | transactions |
+| **Aegis** (centre) | Agent chat with a living voice orb. Tapping it opens full-screen voice mode: the orb reacts to your voice, words appear live, and they're sent when you stop | Agent `/agent/tasks`, `/agent/tasks/{id}/resume` |
+| **Wealth** | Net worth (cash + pots + investments), rich pot cards, and the **investment tracker**: a 5-question risk profile, portfolio with allocation, products with buy/sell (Red tier, 6-digit code) | `/wealth/products`, `/holdings`, `/recommendations`, `/risk-assessment`, `/orders`, `/redemptions`, `/orders/{id}/commit` |
+| **Pot detail** | Colour hero with progress ring, milestones 25/50/75/100, on-track check with catch-up amount, quick add (+¥50/100/500), funded deposits through the shield, history, what-if calculator, emoji and colour picker. **Confetti** at milestones and a celebration screen at 100% | `/savings-pots/{id}`, `/contributions` (funded, `savings.contribute` tier) |
 | **Track spending** | Scan a receipt (recognition service, see below) and match it to a bank transaction, or correct any transaction's category | `PATCH /transactions/{id}/category`, `/api/recognition/receipts` |
-| **Payments** | Recipients, a big-amount send screen, and the shield approval. The receipt appears **only after `COMPLETED`**. You can also cancel subscriptions | `/beneficiaries`, `/transfers/drafts`, `/transfers/{id}/commit`, `/subscriptions/{id}/cancel` |
-| **Me** | Cards (freeze, report lost), an explanation of the Green/Yellow/Red tiers, language (中文/EN), theme (system/light/dark), connection status, and an API log with trace IDs | `/cards/{id}/freeze`, `/unfreeze`, `/report-lost` |
-| **Pot detail** | Full-bleed artwork, an add-money sheet, goal maths (per month, per week, months left), history, and a what-if calculator | `/savings-pots/{id}`, `/contributions` |
+| **Send money** | People and recipients, a big-amount send screen, shield approval; the receipt appears **only after `COMPLETED`** | `/beneficiaries`, `/transfers/drafts`, `/transfers/{id}/commit` |
+| **Me** | Cards (freeze, report lost), the Green/Yellow/Red tiers, language (中文/EN), theme, connection status, and an API log with trace IDs | `/cards/{id}/freeze`, `/unfreeze`, `/report-lost` |
 
 ### The shield (`src/ui/Shield.tsx`)
 Every sensitive action, whether from a screen or from chat, goes through one approval sheet. The tier always comes from the backend's `risk_tier`:
@@ -44,9 +46,11 @@ Current backend policy:
 
 ## Look and feel
 
-Warm and flat, following the team palette: cream background, deep brown text, coral accent, pink, and the Nunito font (bundled, so it works offline). The header scene, the mascot and the contact avatars are drawn in code (`src/ui/art.tsx`), so no image assets are needed.
+Multi-colour and friendly: violet leads, with pink, teal, amber and blue accents, on a soft lavender background (deep navy in dark mode), with the Nunito font bundled so it works offline. Chart categories use a separate colour-blind-checked palette in a fixed order (`--cat-*` in `styles.css`). Contact avatars are drawn in code (`src/ui/art.tsx`), the voice orb is a canvas animation (`src/ui/Orb.tsx`) and confetti is in `src/ui/celebrate.ts`.
 
-- **Signed-in persona:** "Jacky Wang / 王杰" (`PROFILE` in `src/core/people.ts`).
+Demo mode (no backend) ships about three months of fictional activity relative to today (`src/core/mockdata.ts`), so the dashboard, calendar, budgets, pots and reminders have something to show. Live mode shows only what Banking Core returns.
+
+- **Signed-in persona:** "Jackie Chen" (`PROFILE` in `src/core/people.ts`).
 - **Contacts:** the People grid uses the family accounts seeded in Banking Core (爸爸, 妈妈 and so on). Tapping a contact saves them as a recipient through the backend's exact account-number match.
 - **Real photos:** put square images in `public/avatars/` and list them in `PHOTOS` in `src/core/people.ts`. Anyone without a photo keeps the illustration. Only use photos you have permission to use.
 
@@ -156,6 +160,7 @@ server.mjs    static server + token-adding proxy + CORS allowlist for native app
 
 - **Incoming vs outgoing money**: Banking Core doesn't mark rows as debit or credit, so direction is inferred from the category (`src/core/format.ts`).
 - **Agent in English**: with `MODEL_PROVIDER=offline`, the agent's rule-based router only understands Chinese phrasing (e.g. 查询余额). Connect an LLM provider in `.env` for free-form English.
-- **Savings pots are virtual in the backend**: adding money to a pot (`POST /savings-pots/{id}/contributions`) doesn't deduct it from any account, doesn't check the balance, and has no approval tier. The app works around this: it shows "set aside · free" on Home, explains on the add sheet that nothing is moved, and blocks amounts above the free total (all balances minus all pots). That is a front-end check only. A real fix needs Banking Core to either move money to a savings account, or check the balance server-side and add a `savings.contribute` policy tier, so large amounts go through the shield like transfers.
+- **Savings pots** are funded by Banking Core (`savings.contribute`: Yellow up to ¥1,000, Red above). Pot colour and emoji are stored on the device only, because the backend doesn't store them.
+- **Investment returns** aren't shown: Banking Core has no rates or prices, so the tracker shows invested amounts and allocation only.
 - **Voice**: the browser's speech recognition hears one language at a time. The 中/EN button next to the mic switches it, separately from the app's language.
 - **App store icons and splash screens**: still the Capacitor defaults. Generate them from `public/icons/icon.svg` with `@capacitor/assets`.

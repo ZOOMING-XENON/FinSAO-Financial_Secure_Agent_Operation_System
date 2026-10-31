@@ -3,7 +3,7 @@
 // recipient still goes through the backend's exact-match lookup.
 import type { Lang } from './i18n';
 
-export const PROFILE = { name: 'Jacky Wang', nameZh: '王杰', key: 'jacky' };
+export const PROFILE = { name: 'Jackie Chen', nameZh: '陈嘉琪', key: 'jackie' };
 
 export interface Contact {
   key: string;
@@ -42,7 +42,7 @@ export function contactForAccount(accountNumber: string): Contact | undefined {
 
 /** Illustration traits per contact so family members look like themselves. */
 export const LOOKS: Record<string, { age: 'kid' | 'adult' | 'senior'; hair: 'short' | 'long' | 'bun' | 'bald' }> = {
-  jacky: { age: 'adult', hair: 'short' },
+  jackie: { age: 'adult', hair: 'long' },
   dad: { age: 'adult', hair: 'short' },
   mom: { age: 'adult', hair: 'long' },
   'grandpa-w': { age: 'senior', hair: 'bald' },

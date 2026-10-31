@@ -1,4 +1,4 @@
-// Flat illustrations drawn in code: contact avatars, the shield mascot and the home header scene.
+// Contact avatars drawn in code: a photo when one is listed, otherwise a flat illustrated portrait.
 import { useState } from 'react';
 import { hashIndex } from '../core/format';
 import { LOOKS, PHOTOS } from '../core/people';
@@ -59,86 +59,6 @@ export function PersonAvatar({ id, label, size = 56 }: { id: string; label: stri
       )}
       <circle cx="24.5" cy="35" r="1.8" fill="#ff8a7a" opacity=".35" />
       <circle cx="39.5" cy="35" r="1.8" fill="#ff8a7a" opacity=".35" />
-    </svg>
-  );
-}
-
-/** Aegis, the friendly shield. Calm = eyes closed, like it is breathing; happy = open smile. */
-export function Mascot({ size = 96, mood = 'calm' }: { size?: number; mood?: 'calm' | 'happy' }) {
-  return (
-    <svg className="mascot" viewBox="0 0 120 120" width={size} height={size} style={{ width: size, height: size }} aria-hidden="true">
-      <path className="m-body" d="M60 8 18 23v31c0 27 18 48 42 56 24-8 42-29 42-56V23z" />
-      <path className="m-shine" d="M33 30 60 20v8l-27 10z" />
-      {mood === 'calm' ? (
-        <g className="m-face" fill="none" strokeWidth="5" strokeLinecap="round">
-          <path d="M38 56c4 5 11 5 15 0" />
-          <path d="M67 56c4 5 11 5 15 0" />
-          <path d="M48 74c7 5 17 5 24 0" />
-        </g>
-      ) : (
-        <g className="m-face" strokeWidth="5" strokeLinecap="round">
-          <circle cx="46" cy="55" r="4.5" stroke="none" />
-          <circle cx="74" cy="55" r="4.5" stroke="none" />
-          <path d="M46 70c8 9 20 9 28 0" fill="none" />
-        </g>
-      )}
-      <circle className="m-cheek" cx="38" cy="66" r="5" />
-      <circle className="m-cheek" cx="82" cy="66" r="5" />
-    </svg>
-  );
-}
-
-/** Flat header scene: a soft Shenzhen skyline with hills, sun and the mascot. */
-export function HeroScene() {
-  return (
-    <svg className="hero-scene" viewBox="0 0 390 230" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
-      <rect className="h-sky" width="390" height="230" />
-      <circle className="h-sun" cx="300" cy="62" r="24" />
-      <g className="h-cloud">
-        <path d="M330 104a10 10 0 0 1 19-3 8 8 0 0 1 14 4h-33z" />
-        <path d="M226 34a12 12 0 0 1 23-4 9 9 0 0 1 17 5h-40z" />
-      </g>
-      <g transform="translate(151 60) scale(.7)">
-      <g className="h-city">
-        <rect x="70" y="112" width="22" height="70" rx="3" />
-        <rect x="98" y="96" width="18" height="86" rx="3" />
-        <path d="M128 182V84l9-26 9 26v98z" />
-        <rect x="154" y="108" width="26" height="74" rx="3" />
-        <rect x="186" y="122" width="16" height="60" rx="3" />
-        <path d="M236 182v-64q12-14 24 0v64z" />
-        <rect x="268" y="104" width="20" height="78" rx="3" />
-        <rect x="294" y="126" width="28" height="56" rx="3" />
-      </g>
-      <g className="h-windows">
-        <rect x="132" y="96" width="10" height="3" rx="1.5" />
-        <rect x="132" y="108" width="10" height="3" rx="1.5" />
-        <rect x="132" y="120" width="10" height="3" rx="1.5" />
-        <rect x="159" y="118" width="16" height="3" rx="1.5" />
-        <rect x="159" y="130" width="16" height="3" rx="1.5" />
-        <rect x="272" y="116" width="12" height="3" rx="1.5" />
-        <rect x="272" y="128" width="12" height="3" rx="1.5" />
-      </g>
-      </g>
-      <path className="h-hill-far" d="M0 176c60-26 120-30 190-14s140 10 200-12v80H0z" />
-      <path className="h-hill" d="M0 196c70-30 150-22 210-4 60 17 120 6 180-14v52H0z" />
-      <g className="h-tree">
-        <rect x="34" y="176" width="3" height="14" rx="1.5" />
-        <circle cx="35.5" cy="172" r="9" />
-        <rect x="352" y="170" width="3" height="14" rx="1.5" />
-        <circle cx="353.5" cy="166" r="10" />
-      </g>
-      <g transform="translate(170 150) scale(.42)">
-        <path className="m-body" d="M60 8 18 23v31c0 27 18 48 42 56 24-8 42-29 42-56V23z" />
-        <g className="m-face" fill="none" strokeWidth="6" strokeLinecap="round">
-          <path d="M38 56c4 5 11 5 15 0" />
-          <path d="M67 56c4 5 11 5 15 0" />
-          <path d="M48 74c7 5 17 5 24 0" />
-        </g>
-      </g>
-      <g className="h-bird" fill="none" strokeWidth="2" strokeLinecap="round">
-        <path d="M200 70q5-5 10 0q5-5 10 0" />
-        <path d="M232 86q4-4 8 0q4-4 8 0" />
-      </g>
     </svg>
   );
 }

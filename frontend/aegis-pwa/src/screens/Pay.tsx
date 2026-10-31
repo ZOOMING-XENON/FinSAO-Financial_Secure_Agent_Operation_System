@@ -20,7 +20,7 @@ export function recipientLook(b: Beneficiary, lang: 'zh' | 'en') {
  * Contacts and saved recipients as one grid. Picking a contact who isn't saved yet saves them
  * through Banking Core first (exact account-number match), then opens the send screen.
  */
-export function PeopleGrid({ limit, onAdd }: { limit?: number; onAdd?: () => void }) {
+export function PeopleGrid({ limit, onAdd, strip }: { limit?: number; onAdd?: () => void; strip?: boolean }) {
   const { t, lang, toast, errorText } = useApp();
   const saved = useLoad(() => api.get<Beneficiary[]>('/beneficiaries'));
   const [busy, setBusy] = useState('');
@@ -48,7 +48,7 @@ export function PeopleGrid({ limit, onAdd }: { limit?: number; onAdd?: () => voi
   };
 
   return (
-    <div className="people">
+    <div className={'people' + (strip ? ' strip' : '')}>
       {onAdd && (
         <button onClick={onAdd}>
           <span className="more">
@@ -73,6 +73,11 @@ export function PeopleGrid({ limit, onAdd }: { limit?: number; onAdd?: () => voi
       )}
     </div>
   );
+}
+
+/** One scrollable row of people for Home. */
+export function PeopleStrip() {
+  return <PeopleGrid strip />;
 }
 
 export function Pay({ preselect }: { preselect?: string }) {

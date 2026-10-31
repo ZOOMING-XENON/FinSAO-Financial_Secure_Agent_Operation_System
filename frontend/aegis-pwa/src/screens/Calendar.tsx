@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api } from '../core/api';
-import { CATEGORIES, type Budget, type BudgetStatus, type SpendingSummary, type Transaction } from '../core/types';
-import { categoryKey, direction, monthLabel } from '../core/format';
-import { formatMoney, fromCents, isValidAmount, normalizeAmount, percent, toCents } from '../core/money';
+import { CATEGORIES, type Transaction } from '../core/types';
+import { direction, monthLabel } from '../core/format';
+import { formatMoney, fromCents, isValidAmount, normalizeAmount, toCents } from '../core/money';
 import { useApp, useLoad } from '../app/state';
-import { Amount, Icon, Sheet, Skeleton } from '../ui/kit';
+import { Icon, Sheet, Skeleton } from '../ui/kit';
 import { TxRow } from '../ui/TxRow';
 import { loadAccounts, loadRecent } from './Home';
 
@@ -36,7 +36,7 @@ interface DayTotals {
   items: Transaction[];
 }
 
-function SpendCalendar({ month, tx, selected, onSelect }: { month: Month; tx: Transaction[]; selected: string | null; onSelect: (day: string | null) => void }) {
+export function SpendCalendar({ month, tx, selected, onSelect }: { month: Month; tx: Transaction[]; selected: string | null; onSelect: (day: string | null) => void }) {
   const { t, locale } = useApp();
   const days = useMemo(() => {
     const map = new Map<string, DayTotals>();
@@ -111,139 +111,52 @@ function SpendCalendar({ month, tx, selected, onSelect }: { month: Month; tx: Tr
   );
 }
 
-export function Trends() {
+export function Calendar() {
   const { t, locale } = useApp();
-  const [sel, setSel] = useState<Month | null>(null);
+  const [sel, setSel] = useState<Month>(thisMonth());
   const [day, setDay] = useState<string | null>(null);
   const allTx = useLoad(async () => loadRecent(await loadAccounts(), 200));
-  const [budgetOpen, setBudgetOpen] = useState(false);
-
-  // Start on the month of the latest spending so seeded history is visible.
-  const latest = useLoad(async () => {
-    const tx = await loadRecent(await loadAccounts(), 30);
-    const out = tx.find(x => direction(x) === 'out' && x.posted_at);
-    return out?.posted_at?.slice(0, 7) ?? null;
-  });
-  useEffect(() => {
-    if (sel || latest.loading) return;
-    if (latest.data) {
-      const [y, m] = latest.data.split('-').map(Number);
-      setSel({ year: y, month: m });
-    } else setSel(thisMonth());
-  }, [latest.data, latest.loading, sel]);
-  const monthTx = (allTx.data ?? []).filter(x => sel && x.posted_at?.startsWith(key(sel)));
-  const atLatest = !!sel && key(sel) >= key(thisMonth());
-
-  const spend = useLoad(async () => (sel ? api.get<SpendingSummary>('/analytics/monthly-summary', { year: sel.year, month: sel.month }) : undefined), [sel && key(sel)]);
-  const budgets = useLoad(async () => {
-    if (!sel) return [];
-    const all = await api.get<Budget[]>('/budgets');
-    const mine = all.filter(b => b.month.startsWith(key(sel)));
-    const statuses = await Promise.all(mine.map(b => api.get<BudgetStatus>(`/budgets/${b.id}/status`)));
-    return mine.map((b, i) => ({ budget: b, status: statuses[i] }));
-  }, [sel && key(sel)]);
-
-  const cats = Object.entries(spend.data?.by_category ?? {})
-    .map(([c, v]) => ({ cat: categoryKey(c), value: v }))
-    .sort((a, b) => (toCents(b.value) > toCents(a.value) ? 1 : -1));
-  const total = spend.data?.total ?? '0.00';
+  const monthTx = (allTx.data ?? []).filter(x => x.posted_at?.startsWith(key(sel)));
+  const atLatest = key(sel) >= key(thisMonth());
+  const out = monthTx.filter(x => direction(x) === 'out').reduce((s, x) => s + toCents(x.amount), 0n);
+  const inc = monthTx.filter(x => direction(x) === 'in' && x.category !== 'OPENING_BALANCE').reduce((s, x) => s + toCents(x.amount), 0n);
 
   return (
     <>
       <div className="ph">
-        <h1>{t('trends.title')}</h1>
+        <a className="icon-btn" href="#/insights" aria-label={t('common.back')}>
+          <Icon name="i-back" />
+        </a>
+        <h2>{t('ins.calendar')}</h2>
+        <span style={{ width: 40 }} />
       </div>
       <div className="cal-head">
-        <h2>{sel ? monthLabel(sel.year, sel.month, locale) : ''}</h2>
-        <button className="icon-btn" aria-label={t('trends.prev')} onClick={() => sel && (setSel(shift(sel, -1)), setDay(null))}>
+        <button className="icon-btn" aria-label={t('trends.prev')} onClick={() => (setSel(shift(sel, -1)), setDay(null))}>
           <Icon name="i-left" />
         </button>
-        <button className="icon-btn" aria-label={t('trends.next')} disabled={atLatest} style={atLatest ? { opacity: 0.4 } : undefined} onClick={() => sel && (setSel(shift(sel, 1)), setDay(null))}>
+        <h2 className="center">{monthLabel(sel.year, sel.month, locale)}</h2>
+        <button className="icon-btn" aria-label={t('trends.next')} disabled={atLatest} style={atLatest ? { opacity: 0.35 } : undefined} onClick={() => (setSel(shift(sel, 1)), setDay(null))}>
           <Icon name="i-chev" />
         </button>
       </div>
-      {sel && allTx.data && <SpendCalendar month={sel} tx={monthTx} selected={day} onSelect={setDay} />}
-      {allTx.loading && !allTx.data && <Skeleton rows={3} />}
-      {sel && allTx.data && !day && <p className="mut small" style={{ margin: '0 2px 14px' }}>{t('trends.tapDay')}</p>}
-
-      <section className="card">
-        <div className="hero-t">{sel ? t('trends.spent', { month: monthLabel(sel.year, sel.month, locale) }) : ''}</div>
-        <div className="hero-n">
-          <Amount value={total} />
+      <div className="stats cal-stats">
+        <div className="stat s-out">
+          <small>{t('trends.legendOut')}</small>
+          <b>{formatMoney(fromCents(out))}</b>
         </div>
-        {cats.length > 0 && (
-          <div className="stack-bar" aria-hidden="true">
-            {cats.map(c => (
-              <i key={c.cat} className={'c-' + c.cat} style={{ width: Math.max(percent(c.value, total), 3) + '%' }} />
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="card flush">
-        <div className="card-h">
-          <h3>{t('trends.byCategory')}</h3>
+        <div className="stat s-in">
+          <small>{t('trends.legendIn')}</small>
+          <b>{formatMoney(fromCents(inc))}</b>
         </div>
-        {spend.loading && !spend.data && <Skeleton rows={2} />}
-        {spend.data && cats.length === 0 && <div className="empty">{t('trends.noSpend')}</div>}
-        {cats.map(c => (
-          <div className="row" key={c.cat}>
-            <span className={'ico ' + c.cat}>
-              <Icon name={'c-' + c.cat} />
-            </span>
-            <span className="main">
-              <span className="t" style={{ display: 'block' }}>
-                {t(`cat.${c.cat}`)}
-              </span>
-              <span className="s" style={{ display: 'block' }}>
-                {percent(c.value, total)}%
-              </span>
-            </span>
-            <span className="v">
-              <Amount value={c.value} />
-            </span>
-          </div>
-        ))}
-      </section>
-
-      <section className="card">
-        <div className="card-h">
-          <h3>{t('trends.budgets')}</h3>
-          <button className="link" onClick={() => setBudgetOpen(true)}>
-            + {t('trends.newBudget')}
-          </button>
-        </div>
-        {budgets.data?.length === 0 && <div className="empty">{t('trends.noBudgets')}</div>}
-        {budgets.data?.map(({ budget, status }) => {
-          const pct = percent(status.used, status.limit);
-          const over = toCents(status.remaining) < 0n;
-          const cat = categoryKey(budget.category);
-          return (
-            <div key={budget.id} style={{ padding: '10px 0' }}>
-              <div className="goal-top">
-                <b>{t(`cat.${cat}`)}</b>
-                <span className="small">
-                  <Amount value={status.used} /> / <Amount value={status.limit} />
-                </span>
-              </div>
-              <div className={'bar' + (over ? ' over' : status.threshold_exceeded ? ' warn' : '')}>
-                <i style={{ width: pct + '%' }} />
-              </div>
-              <div className="small mut" style={{ marginTop: 6 }}>
-                {over ? t('trends.over', { amount: formatMoney(fromCents(-toCents(status.remaining))) }) : t('trends.left', { amount: formatMoney(status.remaining) })} ·{' '}
-                {t('trends.forecast', { amount: formatMoney(status.estimate) })}
-              </div>
-            </div>
-          );
-        })}
-      </section>
-
-      {sel && <BudgetSheet open={budgetOpen} onClose={() => setBudgetOpen(false)} month={key(sel)} onSaved={budgets.reload} />}
+      </div>
+      {allTx.loading && !allTx.data && <Skeleton rows={4} />}
+      {allTx.data && <SpendCalendar month={sel} tx={monthTx} selected={day} onSelect={setDay} />}
+      {allTx.data && !day && <p className="mut small" style={{ margin: '0 2px 14px' }}>{t('trends.tapDay')}</p>}
     </>
   );
 }
 
-function BudgetSheet({ open, onClose, month, onSaved }: { open: boolean; onClose: () => void; month: string; onSaved: () => void }) {
+export function BudgetSheet({ open, onClose, month, onSaved }: { open: boolean; onClose: () => void; month: string; onSaved: () => void }) {
   const { t, errorText } = useApp();
   const [category, setCategory] = useState<string>('DINING');
   const [limit, setLimit] = useState('');

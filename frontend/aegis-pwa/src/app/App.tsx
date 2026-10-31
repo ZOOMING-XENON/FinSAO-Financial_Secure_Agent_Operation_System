@@ -4,7 +4,9 @@ import { AppProvider, useApp, useClient, useHashRoute } from './state';
 import { ShieldProvider } from '../ui/Shield';
 import { Icon } from '../ui/kit';
 import { Home } from '../screens/Home';
-import { Trends } from '../screens/Trends';
+import { Insights } from '../screens/Insights';
+import { Calendar } from '../screens/Calendar';
+import { Wealth } from '../screens/Wealth';
 import { Aegis } from '../screens/Aegis';
 import { Pay } from '../screens/Pay';
 import { Me } from '../screens/Me';
@@ -14,9 +16,9 @@ import { Track } from '../screens/Track';
 
 const TABS = [
   { id: 'home', icon: 'i-home', key: 'nav.home' },
-  { id: 'trends', icon: 'i-chart', key: 'nav.trends' },
+  { id: 'insights', icon: 'i-chart', key: 'nav.insights' },
   { id: 'aegis', icon: 'i-shield', key: 'nav.aegis' },
-  { id: 'pay', icon: 'i-swap', key: 'nav.pay' },
+  { id: 'wealth', icon: 'i-wallet', key: 'nav.wealth' },
   { id: 'me', icon: 'i-user', key: 'nav.me' },
 ] as const;
 
@@ -40,7 +42,14 @@ function Shell() {
   let mainClass = '';
   switch (route) {
     case 'trends':
-      view = <Trends />;
+    case 'insights':
+      view = <Insights />;
+      break;
+    case 'calendar':
+      view = <Calendar />;
+      break;
+    case 'wealth':
+      view = <Wealth />;
       break;
     case 'aegis':
       view = <Aegis />;
@@ -69,7 +78,8 @@ function Shell() {
       view = <Home />;
       mainClass = 'home';
   }
-  const activeTab = ['pot', 'activity', 'track'].includes(route) ? 'home' : route === 'home' || !TABS.some(x => x.id === route) ? 'home' : route;
+  const parentTab: Record<string, string> = { pot: 'wealth', calendar: 'insights', trends: 'insights', track: 'insights', activity: 'home', pay: 'home' };
+  const activeTab = parentTab[route] ?? (TABS.some(x => x.id === route) ? route : 'home');
 
   return (
     <>

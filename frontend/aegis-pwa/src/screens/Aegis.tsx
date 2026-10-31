@@ -6,7 +6,8 @@ import { formatMoney } from '../core/money';
 import { go, useApp, useClient } from '../app/state';
 import { useShield } from '../ui/Shield';
 import { Amount, Icon } from '../ui/kit';
-import { Mascot } from '../ui/art';
+import { startMicLevel, VoiceOrb, type OrbLevel } from '../ui/Orb';
+import { haptic } from '../ui/celebrate';
 import { loadAccounts } from './Home';
 
 interface Msg {
@@ -74,6 +75,15 @@ export function Aegis() {
   };
   const endRef = useRef<HTMLDivElement>(null);
   const recRef = useRef<{ stop: () => void } | null>(null);
+  const level = useRef<OrbLevel>({ current: 0 }).current;
+  const stopMic = useRef<() => void>(() => undefined);
+  const heard = useRef('');
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [voiceText, setVoiceText] = useState('');
+  useEffect(() => () => {
+    recRef.current?.stop();
+    stopMic.current();
+  }, []);
 
   const push = (m: Omit<Msg, 'id'>) => {
     session.messages = [...session.messages, { ...m, id: uid() }];
@@ -262,26 +272,46 @@ export function Aegis() {
     }
   }
 
-  const toggleVoice = () => {
-    if (listening) {
-      recRef.current?.stop();
-      return;
-    }
+  // Voice mode: full-screen orb that reacts to the mic; what you say is sent when you stop.
+  const closeVoice = (sendIt: boolean) => {
+    recRef.current?.stop();
+    stopMic.current();
+    setListening(false);
+    setVoiceOpen(false);
+    const said = heard.current.trim();
+    heard.current = '';
+    setVoiceText('');
+    if (sendIt && said) send(said);
+  };
+  const toggleVoice = async () => {
+    if (voiceOpen) return closeVoice(true);
     const w = window as unknown as Record<string, unknown>;
     const Rec = (w.SpeechRecognition || w.webkitSpeechRecognition) as (new () => SpeechRec) | undefined;
     if (!Rec) {
       push({ role: 'bot', body: t('aegis.noVoice') });
       return;
     }
+    haptic(10);
+    heard.current = '';
+    setVoiceText('');
+    setVoiceOpen(true);
     const rec = new Rec();
     rec.lang = voiceLang;
     rec.interimResults = true;
-    rec.onresult = e => setText(Array.from(e.results).map(r => r[0].transcript).join(''));
-    rec.onend = () => setListening(false);
+    rec.onresult = e => {
+      heard.current = Array.from(e.results).map(r => r[0].transcript).join('');
+      setVoiceText(heard.current);
+      if (level.current < 0.25) level.current = 0.35; // keep the orb moving even without mic access
+    };
+    rec.onend = () => {
+      setListening(false);
+      if (heard.current.trim()) closeVoice(true);
+    };
     rec.onerror = () => setListening(false);
     recRef.current = rec;
     setListening(true);
     rec.start();
+    stopMic.current = await startMicLevel(level);
   };
 
   const suggestions = [t('aegis.s1'), t('aegis.s2'), t('aegis.s3'), t('aegis.s4'), t('aegis.s5')];
@@ -289,10 +319,10 @@ export function Aegis() {
   return (
     <>
       <div className="chat-head">
-        <button className={'orb' + (listening ? ' listen' : '')} onClick={toggleVoice} aria-label={t('aegis.listen')} aria-pressed={listening}>
-          <Mascot size={104} mood={listening ? 'happy' : 'calm'} />
+        <button className="orb-btn" onClick={toggleVoice} aria-label={t('aegis.tapToTalk')}>
+          <VoiceOrb size={150} active={false} />
         </button>
-        <h1>{listening ? t('aegis.listen') : t('aegis.title')}</h1>
+        <h1>{t('aegis.title')}</h1>
         <p>{t('aegis.sub')}</p>
         {(agent !== 'live' || core !== 'live') && agent !== 'checking' && <p className="small" style={{ color: 'var(--yellow)' }}>{t('conn.agentOffline')}</p>}
       </div>
@@ -330,7 +360,7 @@ export function Aegis() {
           send(text);
         }}
       >
-        <button type="button" className={'icon-btn' + (listening ? ' on' : '')} onClick={toggleVoice} aria-label={t('aegis.listen')}>
+        <button type="button" className={'icon-btn' + (voiceOpen ? ' on' : '')} onClick={toggleVoice} aria-label={t('aegis.tapToTalk')}>
           <Icon name="i-mic" />
         </button>
         <button type="button" className="voice-lang" onClick={switchVoiceLang} aria-label={t('aegis.voiceLang')} title={t('aegis.voiceLang')}>
@@ -341,6 +371,23 @@ export function Aegis() {
           <Icon name="i-send" />
         </button>
       </form>
+      {voiceOpen && (
+        <div className="voice-mode" role="dialog" aria-modal="true" aria-label={t('aegis.listen')}>
+          <button className="icon-btn glass vm-close" onClick={() => closeVoice(false)} aria-label={t('common.close')}>
+            <Icon name="i-x" />
+          </button>
+          <button className="vm-lang" onClick={switchVoiceLang}>{voiceLang === 'zh-CN' ? '中文' : 'English'}</button>
+          <button className="vm-orb" onClick={() => closeVoice(true)} aria-label={t('aegis.tapToSend')}>
+            <VoiceOrb size={280} level={level} active={listening} />
+          </button>
+          <p className="vm-status">{listening ? t('aegis.listen') : t('aegis.paused')}</p>
+          <p className="vm-text">{voiceText || t('aegis.voiceHint')}</p>
+          <button className="btn vm-send" onClick={() => closeVoice(true)} disabled={!voiceText.trim()}>
+            <Icon name="i-send" />
+            {t('aegis.tapToSend')}
+          </button>
+        </div>
+      )}
     </>
   );
 }

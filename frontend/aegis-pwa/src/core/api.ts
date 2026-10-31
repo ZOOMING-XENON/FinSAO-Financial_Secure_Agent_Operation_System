@@ -107,6 +107,8 @@ class Client {
     if (this.core !== 'live') {
       await new Promise(r => setTimeout(r, 120));
       [status, data] = mockCore(method, path, Object.fromEntries(query.map(([k, v]) => [k, String(v)])), opts.body, headers);
+      // Copy like a real network response would, so screens never share objects with the demo store.
+      data = data === null || data === undefined ? data : JSON.parse(JSON.stringify(data));
     } else {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 15000);
