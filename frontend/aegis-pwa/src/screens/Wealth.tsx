@@ -34,6 +34,7 @@ interface Order {
 }
 
 const TIER_RANK: Record<RiskTier, number> = { GREEN: 1, YELLOW: 2, RED: 3 };
+const ALLOC = ['var(--brand)', 'var(--brand-2)', 'var(--brand-3)', 'var(--brand-5)', 'var(--brand-4)'];
 
 async function loadWealth() {
   const [accounts, pots, products, holdings, recs] = await Promise.all([
@@ -149,98 +150,115 @@ export function Wealth() {
       <div className="sec-h">
         <h2>{t('inv.title')}</h2>
       </div>
-
-      {!profile ? (
-        <button className="card quiz-cta" onClick={() => setQuiz(true)}>
-          <span className="quiz-ico">
+      <section className="inv-hero">
+        <div className="inv-hero-top">
+          <span className="hero-t">{t('inv.invested')}</span>
+          {profile && (
+            <button className="inv-profile" onClick={() => setQuiz(true)} aria-label={t('inv.retake')}>
+              <span className={'tier-dot ' + profile} />
+              {t(`inv.profile.${profile}` as 'inv.profile.GREEN')}
+            </button>
+          )}
+        </div>
+        <span className="amt big">{m$(invested)}</span>
+        <span className="inv-sub">{holdings.length ? t('inv.holdingsN', { n: holdings.length }) : t('inv.noHoldings')}</span>
+        {holdings.length > 0 && (
+          <div className="alloc" aria-hidden="true">
+            {holdings.map((h, i) => (
+              <i key={h.id} style={{ width: (invested > 0n ? Number((toCents(h.amount) * 1000n) / invested) / 10 : 0) + '%', background: ALLOC[i % ALLOC.length] }} />
+            ))}
+          </div>
+        )}
+        {!profile && (
+          <button className="btn inv-unlock" onClick={() => setQuiz(true)}>
             <Icon name="i-spark" />
-          </span>
-          <span className="main">
-            <b>{t('inv.quizTitle')}</b>
-            <span className="mut small">{t('inv.quizHint')}</span>
-          </span>
-          <Icon name="i-chev" />
-        </button>
-      ) : (
-        <section className="card profile-card">
-          <span className={'tier-dot ' + profile} />
-          <span className="main">
-            <b>{t(`inv.profile.${profile}` as 'inv.profile.GREEN')}</b>
-            <span className="mut small">{t(`inv.profileD.${profile}` as 'inv.profileD.GREEN')}</span>
-          </span>
-          <button className="link" onClick={() => setQuiz(true)}>
-            {t('inv.retake')}
+            {t('inv.quizTitle')}
           </button>
+        )}
+      </section>
+
+      {holdings.length > 0 && (
+        <section className="card flush">
+          <div className="card-h">
+            <h3>{t('inv.portfolio')}</h3>
+          </div>
+          {holdings.map((h, i) => {
+            const p = byId.get(h.product_id);
+            const pct = invested > 0n ? Number((toCents(h.amount) * 100n) / invested) : 0;
+            return (
+              <div className="row" key={h.id}>
+                <i className="sw big" style={{ background: ALLOC[i % ALLOC.length] }} />
+                <span className="main">
+                  <span className="t" style={{ display: 'block' }}>
+                    {p?.name ?? h.product_id}
+                  </span>
+                  <span className="s" style={{ display: 'block' }}>
+                    {pct}% · {p ? t(`pt.${p.product_type}` as 'pt.BOND_FUND') : ''}
+                  </span>
+                </span>
+                <span className="v">
+                  {m$(toCents(h.amount))}
+                  {p?.supports_redemption && (
+                    <button className="link block" onClick={() => setTrade({ product: p, mode: 'sell' })}>
+                      {t('inv.sell')}
+                    </button>
+                  )}
+                </span>
+              </div>
+            );
+          })}
         </section>
       )}
 
-      <section className="card flush">
-        <div className="card-h">
-          <h3>{t('inv.portfolio')}</h3>
-          <span className="mut small">{m$(invested)}</span>
-        </div>
-        {holdings.length === 0 && <div className="empty">{t('inv.noHoldings')}</div>}
-        {holdings.map(h => {
-          const p = byId.get(h.product_id);
-          const pct = invested > 0n ? Number((toCents(h.amount) * 100n) / invested) : 0;
-          return (
-            <div className="row" key={h.id}>
-              <span className={'ico inv ' + (p?.risk_tier ?? 'GREEN')}>
-                <Icon name="i-trend-up" />
-              </span>
-              <span className="main">
-                <span className="t" style={{ display: 'block' }}>
-                  {p?.name ?? h.product_id}
-                </span>
-                <span className="bar thin">
-                  <i style={{ width: pct + '%' }} />
-                </span>
-              </span>
-              <span className="v">
-                {m$(toCents(h.amount))}
-                {p?.supports_redemption && (
-                  <button className="link block" onClick={() => setTrade({ product: p, mode: 'sell' })}>
-                    {t('inv.sell')}
-                  </button>
-                )}
-              </span>
-            </div>
-          );
-        })}
-      </section>
-
-      <section className="card flush">
-        <div className="card-h">
-          <h3>{t('inv.products')}</h3>
-        </div>
+      <div className="sec-h">
+        <h2 className="h3">{t('inv.products')}</h2>
+      </div>
+      <div className="prod-list">
         {products.map(p => {
-          const ok = !!profile && TIER_RANK[profile] >= TIER_RANK[p.risk_tier];
+          const rank = TIER_RANK[p.risk_tier];
+          const ok = !!profile && TIER_RANK[profile] >= rank;
           return (
-            <div className="row" key={p.id}>
-              <span className={'ico inv ' + p.risk_tier}>
-                <Icon name="i-chart" />
-              </span>
-              <span className="main">
-                <span className="t" style={{ display: 'block' }}>
-                  {p.name}
+            <article className={'prod ' + p.risk_tier} key={p.id}>
+              <div className="prod-top">
+                <span className="prod-ico">
+                  <Icon name="i-chart" />
                 </span>
-                <span className="s" style={{ display: 'block' }}>
-                  {t(`pt.${p.product_type}` as 'pt.BOND_FUND')} · {t('inv.min', { amount: formatMoney(p.minimum_amount) })}
+                <span className="main">
+                  <b>{p.name}</b>
+                  <small>{t(`pt.${p.product_type}` as 'pt.BOND_FUND')}</small>
                 </span>
-              </span>
-              <span className="v">
-                <Badge tone={p.risk_tier}>{t(`inv.risk.${p.risk_tier}` as 'inv.risk.GREEN')}</Badge>
-                <button className="btn primary sm block-btn" disabled={!ok} onClick={() => setTrade({ product: p, mode: 'buy' })} title={ok ? '' : t('inv.unsuitable')}>
-                  {t('inv.buy')}
-                </button>
-              </span>
-            </div>
+              </div>
+              <div className="risk-meter" aria-label={t(`inv.risk.${p.risk_tier}` as 'inv.risk.GREEN')}>
+                {[1, 2, 3].map(i => (
+                  <i key={i} className={i <= rank ? 'on' : ''} />
+                ))}
+                <span>{t(`inv.risk.${p.risk_tier}` as 'inv.risk.GREEN')}</span>
+              </div>
+              <div className="prod-foot">
+                <span className="mut small">{t('inv.min', { amount: formatMoney(p.minimum_amount) })}</span>
+                {!profile ? (
+                  <button className="btn sm unlock" onClick={() => setQuiz(true)}>
+                    <Icon name="i-lock" />
+                    {t('inv.unlock')}
+                  </button>
+                ) : ok ? (
+                  <button className="btn primary sm" onClick={() => setTrade({ product: p, mode: 'buy' })}>
+                    {t('inv.buy')}
+                  </button>
+                ) : (
+                  <span className="locked">
+                    <Icon name="i-lock" />
+                    {t('inv.unsuitable')}
+                  </span>
+                )}
+              </div>
+            </article>
           );
         })}
-        <p className="mut small" style={{ margin: '6px 16px 12px' }}>
-          {t('inv.disclaimer')}
-        </p>
-      </section>
+      </div>
+      <p className="mut small" style={{ margin: '4px 4px 16px' }}>
+        {t('inv.disclaimer')}
+      </p>
 
       <RiskQuiz open={quiz} onClose={() => setQuiz(false)} onDone={() => w.reload()} />
       {trade && <TradeSheet trade={trade} accounts={accounts} holding={holdings.find(h => h.product_id === trade.product.id)} onClose={() => setTrade(null)} onDone={() => w.reload()} />}

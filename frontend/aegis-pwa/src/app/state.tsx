@@ -81,7 +81,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       locale: localeOf(lang),
       setLang: l => {
         writePref('aegis.lang', l);
+        api.lang = localeOf(l) as 'zh-CN' | 'en-US';
         setLangState(l);
+        setVersion(v => v + 1); // reload data so names come back in the new language
       },
       theme,
       setTheme: th => {

@@ -1,6 +1,6 @@
 // Banking Core + Agent client. Framework-free so a React Native port can reuse it.
 // Rules: X-Trace-Id on every call, money as decimal strings, authorization refs never logged or stored.
-import { mockCore, MOCK_MFA_CODE } from './mock';
+import { localizeDemo, mockCore, MOCK_MFA_CODE } from './mock';
 import type { AgentTask, ConversationMessage } from './types';
 
 export class ApiError extends Error {
@@ -108,7 +108,7 @@ class Client {
       await new Promise(r => setTimeout(r, 120));
       [status, data] = mockCore(method, path, Object.fromEntries(query.map(([k, v]) => [k, String(v)])), opts.body, headers);
       // Copy like a real network response would, so screens never share objects with the demo store.
-      data = data === null || data === undefined ? data : JSON.parse(JSON.stringify(data));
+      data = data === null || data === undefined ? data : localizeDemo(JSON.parse(JSON.stringify(data)), this.lang);
     } else {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 15000);
