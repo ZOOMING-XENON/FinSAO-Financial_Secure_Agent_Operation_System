@@ -2,6 +2,7 @@
 // Mirrors the seed data (user "Lin") and the real policy: transfers are YELLOW until
 // today's outgoing total passes ¥1,000, then RED; card.report_lost and wealth are RED.
 import { fromCents, toCents } from './money';
+import { buildDemo } from './mockdata';
 
 export const MOCK_MFA_CODE = '123456';
 
@@ -60,6 +61,43 @@ const db = {
   idem: {} as Record<string, Json>,
 };
 
+// Fill the demo with ~3 months of fictional activity, current budgets, subscriptions and pots.
+{
+  const demo = buildDemo();
+  demo.tx.forEach((t, i) =>
+    db.tx.push({ id: U(1000 + i), reference: t.reference, status: 'COMPLETED', amount: t.amount, currency: 'CNY', description: t.description, category: t.category, posted_at: t.posted_at, account: CHECKING, out: t.out }),
+  );
+  db.balances[CHECKING] += demo.netCents;
+  demo.budgets.forEach((b, i) => db.budgets.push({ id: U(520 + i), ...b, currency: 'CNY' }));
+  db.subs = demo.subs.map((x, i) => ({ id: U(400 + i), ...x, currency: 'CNY', active: true, status: 'ACTIVE', cancelled_at: null }));
+  db.pots = demo.pots.map((x, i) => ({ id: U(700 + i), ...x, currency: 'CNY', status: 'ACTIVE', allocation_mode: 'ACCOUNT_FUNDED', updated_at: x.created_at }));
+  db.pots.forEach(pot => {
+    const parts = 4n;
+    const total = toCents(String(pot.saved_amount));
+    for (let k = 0n; k < parts; k++) {
+      const amount = k === parts - 1n ? total - (total / parts) * (parts - 1n) : total / parts;
+      const when = new Date(Date.parse(String(pot.created_at)) + Number(k) * 26 * 86_400_000).toISOString();
+      db.contributions.push({ id: rid(), pot_id: pot.id, source_account_id: SAVINGS, transaction_id: null, amount: fromCents(amount), note: null, created_at: when });
+    }
+  });
+}
+
+const PRODUCTS = ([
+  ['MMF-01', 'Demo Liquidity Fund‖演示货币基金', 'MONEY_MARKET_FUND', 'GREEN', '100.00', true],
+  ['GOV-01', 'Demo Government Bond‖演示国债', 'GOVERNMENT_BOND', 'GREEN', '1000.00', true],
+  ['BOND-01', 'Demo Steady Bond Fund‖演示稳健债券基金', 'BOND_FUND', 'YELLOW', '1000.00', true],
+  ['FIXED-01', 'Demo Fixed Income Plan‖演示固收计划', 'FIXED_INCOME', 'YELLOW', '5000.00', false],
+] as [string, string, string, string, string, boolean][]).map(([code, name, product_type, risk_tier, minimum_amount, supports_redemption], i) => ({
+  id: U(60 + i), code: 'DEMO-' + code, name, product_type, risk_tier, minimum_amount, currency: 'CNY', supports_redemption,
+}));
+const wealth = {
+  risk: null as null | { id: string; score: number; risk_tier: string },
+  holdings: {} as Record<string, bigint>,
+  orders: {} as Record<string, Json & { status: string; amount: string; product_id: string; account_id: string; order_type: string }>,
+};
+const TIER = { GREEN: 1, YELLOW: 2, RED: 3 } as Record<string, number>;
+const suitable = (p: (typeof PRODUCTS)[number]) => !!wealth.risk && TIER[wealth.risk.risk_tier] >= TIER[p.risk_tier];
+
 const RED_OPS = new Set(['card.report_lost', 'wealth.subscribe', 'wealth.redeem', 'password.change']);
 const YELLOW_OPS = new Set(['subscription.cancel', 'card.limit', 'card.freeze', 'card.unfreeze', 'virtual_card.apply']);
 
@@ -103,6 +141,14 @@ function spending(year: number, month: number) {
 
 const publicTx = ({ account: _a, out: _o, ...t }: Tx) => t;
 
+/** Demo strings are stored as "English‖中文"; answer in the caller's language like a real API would. */
+export function localizeDemo<T>(value: T, lang: string): T {
+  const zh = lang.toLowerCase().startsWith('zh');
+  const walk = (v: unknown): unknown =>
+    typeof v === 'string' && v.includes('‖') ? v.split('‖')[zh ? 1 : 0] : Array.isArray(v) ? v.map(walk) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v;
+  return walk(value) as T;
+}
+
 export function mockCore(method: string, path: string, q: Record<string, string>, body: unknown, headers: Record<string, string>): Result {
   const b = (body ?? {}) as Json;
   const m = (re: RegExp) => path.match(re);
@@ -126,6 +172,12 @@ export function mockCore(method: string, path: string, q: Record<string, string>
     return [200, { items, limit, offset }];
   }
 
+  if (method === 'PATCH' && (r = m(/^\/transactions\/([^/]+)\/category$/))) {
+    const tx = db.tx.find(x => x.id === r![1]);
+    if (!tx) return err(404, 'NOT_FOUND', 'transaction not found');
+    tx.category = String(b.category || '').toUpperCase() || 'UNKNOWN';
+    return [200, publicTx(tx)];
+  }
   if (method === 'GET' && path === '/beneficiaries') return [200, db.beneficiaries];
   if (method === 'POST' && path === '/beneficiaries') {
     const number = String(b.account_number || '').trim();
@@ -268,6 +320,54 @@ export function mockCore(method: string, path: string, q: Record<string, string>
     return [200, { limit: fromCents(limit), used: fromCents(used), remaining: fromCents(limit - used), estimate: fromCents(used), threshold_exceeded: used * 100n >= limit * 80n }];
   }
 
+  if (method === 'GET' && path === '/wealth/products') return [200, PRODUCTS];
+  if (method === 'GET' && path === '/wealth/recommendations') return [200, PRODUCTS.filter(suitable)];
+  if (method === 'GET' && path === '/wealth/holdings') {
+    return [200, Object.entries(wealth.holdings).filter(([, c]) => c > 0n).map(([product_id, c]) => ({ id: 'h-' + product_id, product_id, amount: fromCents(c), currency: 'CNY' }))];
+  }
+  if (method === 'POST' && path === '/wealth/risk-assessment') {
+    const answers = (b.answers as number[]) ?? [];
+    if (answers.length !== 5 || answers.some(a => a < 1 || a > 5)) return err(409, 'CONFLICT', 'five answers from 1 to 5 are required');
+    const score = answers.reduce((x, y) => x + y, 0);
+    wealth.risk = { id: rid(), score, risk_tier: score <= 10 ? 'GREEN' : score <= 18 ? 'YELLOW' : 'RED' };
+    return [200, wealth.risk];
+  }
+  if (method === 'POST' && (path === '/wealth/orders' || path === '/wealth/redemptions')) {
+    const key = 'order:' + b.idempotency_key;
+    if (db.idem[key]) return [200, db.idem[key]];
+    const product = PRODUCTS.find(p => p.id === b.product_id);
+    if (!product) return err(404, 'NOT_FOUND', 'product not found');
+    const amount = toCents(String(b.amount));
+    const redeem = path === '/wealth/redemptions';
+    if (redeem) {
+      if (!product.supports_redemption) return err(409, 'CONFLICT', 'product does not support redemption');
+      if ((wealth.holdings[product.id] ?? 0n) < amount) return err(409, 'CONFLICT', 'redemption exceeds holding');
+    } else {
+      if (!suitable(product)) return err(403, 'FORBIDDEN', 'product is unsuitable for current risk profile');
+      if (amount < toCents(product.minimum_amount)) return err(409, 'CONFLICT', 'order amount or currency is invalid');
+    }
+    const order = { id: rid(), account_id: String(b.account_id), product_id: product.id, amount: fromCents(amount), currency: 'CNY', status: 'PENDING_AUTHORIZATION', order_type: redeem ? 'REDEMPTION' : 'SUBSCRIPTION', transaction_id: null };
+    wealth.orders[order.id] = order;
+    db.idem[key] = order;
+    return [200, order];
+  }
+  if (method === 'POST' && (r = m(/^\/wealth\/orders\/([^/]+)\/commit$/))) {
+    const order = wealth.orders[r[1]];
+    if (!order) return err(404, 'NOT_FOUND', 'wealth order not found');
+    if (order.status === 'COMPLETED') return [200, order];
+    const redeem = order.order_type === 'REDEMPTION';
+    const denied = consume(b.authorization_ref, String(order.id), redeem ? 'wealth.redeem' : 'wealth.subscribe');
+    if (denied) return denied;
+    const amount = toCents(order.amount);
+    if (!redeem && amount > db.balances[order.account_id]) return err(409, 'INSUFFICIENT_FUNDS');
+    db.balances[order.account_id] += redeem ? amount : -amount;
+    wealth.holdings[order.product_id] = (wealth.holdings[order.product_id] ?? 0n) + (redeem ? -amount : amount);
+    const product = PRODUCTS.find(p => p.id === order.product_id)!;
+    const txId = rid();
+    db.tx.push({ id: txId, reference: 'WLT-' + Date.now().toString(36).toUpperCase(), status: 'COMPLETED', amount: order.amount, currency: 'CNY', description: `${redeem ? 'Redeemed' : 'Invested in'} ${product.name}`, category: 'WEALTH', posted_at: now(), account: order.account_id, out: !redeem });
+    Object.assign(order, { status: 'COMPLETED', transaction_id: txId });
+    return [200, order];
+  }
   if (method === 'GET' && path === '/savings-pots') return [200, db.pots.filter(p => p.status !== 'DELETED')];
   if (method === 'POST' && path === '/savings-pots') {
     const key = 'pot:' + b.idempotency_key;

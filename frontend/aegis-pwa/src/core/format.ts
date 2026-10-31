@@ -5,7 +5,7 @@ import { CATEGORIES } from './types';
 export type Direction = 'in' | 'out' | 'move';
 
 const INBOUND = new Set(['OPENING_BALANCE', 'INCOME', 'SALARY', 'REFUND', 'INTEREST']);
-const MOVES = new Set(['INTERNAL_TRANSFER', 'WEALTH']);
+const MOVES = new Set(['INTERNAL_TRANSFER', 'WEALTH', 'SAVINGS']);
 
 /** Banking Core does not expose debit/credit per row yet, so direction is inferred from category. */
 export function direction(tx: Transaction): Direction {

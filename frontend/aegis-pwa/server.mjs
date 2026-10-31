@@ -22,7 +22,7 @@ const TYPES = {
 
 const SECURITY_HEADERS = {
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; " +
     "connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
@@ -59,7 +59,8 @@ function proxy(req, res, target, upstreamPath, token, cors = {}) {
   delete headers.origin;
   delete headers.referer;
   delete headers.cookie;
-  headers.authorization = `Bearer ${token}`;
+  if (token) headers.authorization = `Bearer ${token}`;
+  else delete headers.authorization;
   const upstream = http.request(
     { hostname: target.hostname, port: target.port, path: upstreamPath, method: req.method, headers },
     response => {
@@ -100,6 +101,8 @@ export function createAegisServer({
   agentBackend = process.env.AGENT_BACKEND_URL || 'http://127.0.0.1:8100',
   coreToken = process.env.BANKING_SERVICE_TOKEN || 'development-only',
   agentToken = process.env.AGENT_API_TOKEN || 'development-agent-only',
+  recognitionBackend = process.env.RECOGNITION_BACKEND_URL || '',
+  recognitionToken = process.env.RECOGNITION_TOKEN || '',
   allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : NATIVE_ORIGINS,
 } = {}) {
   const core = new URL(coreBackend);
@@ -119,6 +122,15 @@ export function createAegisServer({
     }
     if (url.pathname.startsWith('/api/core/')) {
       return proxy(req, res, core, url.pathname.slice('/api/core'.length) + url.search, coreToken, cors);
+    }
+    if (url.pathname.startsWith('/api/recognition/')) {
+      // Receipt recognition (separate service). Not configured → 501 so the app shows a clear message.
+      if (!recognitionBackend) {
+        res.writeHead(501, { 'Content-Type': 'application/json; charset=utf-8', ...cors });
+        return res.end(JSON.stringify({ code: 'RECOGNITION_NOT_CONFIGURED' }));
+      }
+      const target = new URL(recognitionBackend);
+      return proxy(req, res, target, url.pathname.slice('/api/recognition'.length) + url.search, recognitionToken, cors);
     }
     if (url.pathname.startsWith('/api/agent/')) {
       const path = url.pathname === '/api/agent/openapi.json'

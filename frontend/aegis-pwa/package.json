@@ -18,6 +18,7 @@
     "@capacitor/android": "^8.6.0",
     "@capacitor/core": "^8.6.0",
     "@capacitor/ios": "^8.6.0",
+    "@fontsource-variable/nunito": "^5.3.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
