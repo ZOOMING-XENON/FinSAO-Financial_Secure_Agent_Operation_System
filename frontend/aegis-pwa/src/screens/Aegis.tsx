@@ -6,6 +6,7 @@ import { formatMoney } from '../core/money';
 import { go, useApp, useClient } from '../app/state';
 import { useShield } from '../ui/Shield';
 import { Amount, Icon } from '../ui/kit';
+import { Mascot } from '../ui/art';
 import { loadAccounts } from './Home';
 
 interface Msg {
@@ -282,7 +283,7 @@ export function Aegis() {
     <>
       <div className="chat-head">
         <button className={'orb' + (listening ? ' listen' : '')} onClick={toggleVoice} aria-label={t('aegis.listen')} aria-pressed={listening}>
-          <Icon name={listening ? 'i-mic' : 'i-shield'} />
+          <Mascot size={104} mood={listening ? 'happy' : 'calm'} />
         </button>
         <h1>{listening ? t('aegis.listen') : t('aegis.title')}</h1>
         <p>{t('aegis.sub')}</p>

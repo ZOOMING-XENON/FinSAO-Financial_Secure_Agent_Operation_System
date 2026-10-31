@@ -126,6 +126,12 @@ export function mockCore(method: string, path: string, q: Record<string, string>
     return [200, { items, limit, offset }];
   }
 
+  if (method === 'PATCH' && (r = m(/^\/transactions\/([^/]+)\/category$/))) {
+    const tx = db.tx.find(x => x.id === r![1]);
+    if (!tx) return err(404, 'NOT_FOUND', 'transaction not found');
+    tx.category = String(b.category || '').toUpperCase() || 'UNKNOWN';
+    return [200, publicTx(tx)];
+  }
   if (method === 'GET' && path === '/beneficiaries') return [200, db.beneficiaries];
   if (method === 'POST' && path === '/beneficiaries') {
     const number = String(b.account_number || '').trim();

@@ -5,8 +5,75 @@ import { daysUntil, formatDate } from '../core/format';
 import { formatMoney, isValidAmount, normalizeAmount, toCents } from '../core/money';
 import { go, useApp, useLoad } from '../app/state';
 import { useShield } from '../ui/Shield';
-import { Amount, Avatar, Badge, Icon, Sheet, Skeleton } from '../ui/kit';
+import { Amount, Badge, Icon, Sheet, Skeleton } from '../ui/kit';
+import { PersonAvatar } from '../ui/art';
+import { CONTACTS, contactForAccount, contactName, type Contact } from '../core/people';
 import { loadAccounts } from './Home';
+
+/** Avatar key and display name for a saved recipient, using the contact list when it matches. */
+export function recipientLook(b: Beneficiary, lang: 'zh' | 'en') {
+  const c = contactForAccount(b.destination_account_number);
+  return { key: c?.key ?? b.id, name: c ? contactName(c, lang) : b.nickname || b.name };
+}
+
+/**
+ * Contacts and saved recipients as one grid. Picking a contact who isn't saved yet saves them
+ * through Banking Core first (exact account-number match), then opens the send screen.
+ */
+export function PeopleGrid({ limit, onAdd }: { limit?: number; onAdd?: () => void }) {
+  const { t, lang, toast, errorText } = useApp();
+  const saved = useLoad(() => api.get<Beneficiary[]>('/beneficiaries'));
+  const [busy, setBusy] = useState('');
+  const savedFor = (c: Contact) => saved.data?.find(b => b.destination_account_number === c.accountNumber);
+  const extras = (saved.data ?? []).filter(b => !contactForAccount(b.destination_account_number));
+  const people = [
+    ...CONTACTS.map(c => ({ key: c.key, name: contactName(c, lang), contact: c as Contact | null, saved: savedFor(c) })),
+    ...extras.map(b => ({ key: b.id, name: b.nickname || b.name, contact: null, saved: b as Beneficiary | undefined })),
+  ];
+  const shown = limit ? people.slice(0, limit) : people;
+
+  const pick = async (p: (typeof people)[number]) => {
+    if (busy) return;
+    if (p.saved) return go('pay/' + p.saved.id);
+    if (!p.contact) return;
+    setBusy(p.key);
+    try {
+      const b = await api.post<Beneficiary>('/beneficiaries', { name: p.contact.zh, account_number: p.contact.accountNumber });
+      go('pay/' + b.id);
+    } catch (e) {
+      toast(errorText(e));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return (
+    <div className="people">
+      {onAdd && (
+        <button onClick={onAdd}>
+          <span className="more">
+            <Icon name="i-plus" />
+          </span>
+          <span>{t('pay.newRecipient')}</span>
+        </button>
+      )}
+      {shown.map(p => (
+        <button key={p.key} onClick={() => pick(p)} aria-busy={busy === p.key} style={busy === p.key ? { opacity: 0.5 } : undefined}>
+          <PersonAvatar id={p.key} label={p.name} />
+          <span>{p.name}</span>
+        </button>
+      ))}
+      {limit && people.length > limit && (
+        <a href="#/pay">
+          <span className="more">
+            <Icon name="i-chev" />
+          </span>
+          <span>{t('home.more')}</span>
+        </a>
+      )}
+    </div>
+  );
+}
 
 export function Pay({ preselect }: { preselect?: string }) {
   const { t, locale, toast, errorText, refresh } = useApp();
@@ -63,21 +130,7 @@ export function Pay({ preselect }: { preselect?: string }) {
         <h1>{t('pay.title')}</h1>
       </div>
       <div className="section-t">{t('pay.to')}</div>
-      <div className="payees">
-        <button className="payee" onClick={() => setAddOpen(true)}>
-          <span className="avatar new">
-            <Icon name="i-plus" />
-          </span>
-          <span>{t('pay.newRecipient')}</span>
-        </button>
-        {(payees.data ?? []).map(p => (
-          <button className="payee" key={p.id} onClick={() => setTo(p)}>
-            <Avatar name={p.nickname || p.name} />
-            <span>{p.nickname || p.name}</span>
-          </button>
-        ))}
-      </div>
-      {payees.data?.length === 0 && <p className="mut small">{t('pay.noRecipients')}</p>}
+      <PeopleGrid onAdd={() => setAddOpen(true)} />
 
       <div className="tier-hint">
         <Icon name="i-shield" />
@@ -132,7 +185,7 @@ export function Pay({ preselect }: { preselect?: string }) {
 }
 
 function AmountStep({ to, accounts, onBack, onSent }: { to: Beneficiary; accounts: { id: string; name: string; account_number: string; balance: string; currency: string }[]; onBack: () => void; onSent: (r: TransferReceipt) => void }) {
-  const { t, errorText } = useApp();
+  const { t, lang, errorText } = useApp();
   const authorize = useShield();
   const [amount, setAmount] = useState('');
   const [src, setSrc] = useState(accounts[0]?.id ?? '');
@@ -210,9 +263,9 @@ function AmountStep({ to, accounts, onBack, onSent }: { to: Beneficiary; account
       </div>
       <section className="amount-card">
         <div className="who">
-          <Avatar name={to.nickname || to.name} />
+          <PersonAvatar id={recipientLook(to, lang).key} label={recipientLook(to, lang).name} size={44} />
           <div>
-            <div style={{ fontWeight: 700 }}>{to.name}</div>
+            <div style={{ fontWeight: 700 }}>{recipientLook(to, lang).name}</div>
             <div className="s">•••• {to.destination_account_number.slice(-4)}</div>
           </div>
         </div>

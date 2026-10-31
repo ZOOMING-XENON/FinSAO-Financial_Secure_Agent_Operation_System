@@ -10,6 +10,7 @@ import { Pay } from '../screens/Pay';
 import { Me } from '../screens/Me';
 import { NewPot, PotDetail } from '../screens/Pot';
 import { Activity } from '../screens/Activity';
+import { Track } from '../screens/Track';
 
 const TABS = [
   { id: 'home', icon: 'i-home', key: 'nav.home' },
@@ -54,6 +55,9 @@ function Shell() {
     case 'activity':
       view = <Activity />;
       break;
+    case 'track':
+      view = <Track />;
+      break;
     case 'pot':
       if (arg === 'new') view = <NewPot />;
       else {
@@ -63,8 +67,9 @@ function Shell() {
       break;
     default:
       view = <Home />;
+      mainClass = 'home';
   }
-  const activeTab = route === 'pot' || route === 'activity' ? 'home' : route;
+  const activeTab = ['pot', 'activity', 'track'].includes(route) ? 'home' : route === 'home' || !TABS.some(x => x.id === route) ? 'home' : route;
 
   return (
     <>

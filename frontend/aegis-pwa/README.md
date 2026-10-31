@@ -8,9 +8,10 @@ The mobile front end for FinSAO, built as a **React + TypeScript PWA**. The same
 
 | Tab | What it does | Backend |
 |---|---|---|
-| **Home** | A swipeable balance card for each account, an "Ask Aegis" bar, a budget "shield check", an activity list with grouped upcoming payments, and savings pots | `/accounts`, `/balance`, `/transactions`, `/subscriptions`, `/budgets/{id}/status`, `/savings-pots` |
-| **Trends** | Monthly spending by category, a stacked bar, and budgets with forecasts (create new budgets here) | `/analytics/monthly-summary`, `/budgets` |
+| **Home** | Illustrated header with a greeting, swipeable balance cards, quick tiles (send, track spending, start a pot, calendar), a People grid, an "Ask Aegis" bar, a budget "shield check", activity and savings pots | `/accounts`, `/balance`, `/transactions`, `/subscriptions`, `/budgets/{id}/status`, `/savings-pots` |
+| **Trends** | A month calendar showing money out (darker = bigger day) and money in per day; tap a day for its transactions. Below: spending by category and budgets with forecasts | `/analytics/monthly-summary`, `/budgets` |
 | **Aegis** (centre) | Agent chat with a voice orb. It shows clarification forms, plan steps, and approvals for actions | Agent `/agent/tasks`, `/agent/tasks/{id}/resume` |
+| **Track spending** | Scan a receipt (recognition service, see below) and match it to a bank transaction, or correct any transaction's category | `PATCH /transactions/{id}/category`, `/api/recognition/receipts` |
 | **Payments** | Recipients, a big-amount send screen, and the shield approval. The receipt appears **only after `COMPLETED`**. You can also cancel subscriptions | `/beneficiaries`, `/transfers/drafts`, `/transfers/{id}/commit`, `/subscriptions/{id}/cancel` |
 | **Me** | Cards (freeze, report lost), an explanation of the Green/Yellow/Red tiers, language (中文/EN), theme (system/light/dark), connection status, and an API log with trace IDs | `/cards/{id}/freeze`, `/unfreeze`, `/report-lost` |
 | **Pot detail** | Full-bleed artwork, an add-money sheet, goal maths (per month, per week, months left), history, and a what-if calculator | `/savings-pots/{id}`, `/contributions` |
@@ -41,6 +42,29 @@ Current backend policy:
   - Voice uses the browser's own speech recognition.
 - **Chat guards**: messages containing passwords, codes or card numbers are blocked before sending, and obvious prompt-injection attempts are refused.
 
+## Look and feel
+
+Warm and flat, following the team palette: cream background, deep brown text, coral accent, pink, and the Nunito font (bundled, so it works offline). The header scene, the mascot and the contact avatars are drawn in code (`src/ui/art.tsx`), so no image assets are needed.
+
+- **Signed-in persona:** "Jacky Wang / 王杰" (`PROFILE` in `src/core/people.ts`).
+- **Contacts:** the People grid uses the family accounts seeded in Banking Core (爸爸, 妈妈 and so on). Tapping a contact saves them as a recipient through the backend's exact account-number match.
+- **Real photos:** put square images in `public/avatars/` and list them in `PHOTOS` in `src/core/people.ts`. Anyone without a photo keeps the illustration. Only use photos you have permission to use.
+
+## Receipt recognition contract (for the recognition service)
+
+The app sends the photo to `POST /api/recognition/receipts`. `server.mjs` (and `npm run dev`) forward that to `RECOGNITION_BACKEND_URL` + `/receipts`, adding `Authorization: Bearer $RECOGNITION_TOKEN` if one is set. When `RECOGNITION_BACKEND_URL` isn't set, the route answers 501 and the app says recognition isn't connected. In demo mode the app shows a labelled example instead.
+
+Request: `multipart/form-data` with one file field named `receipt`.
+
+Response (JSON):
+```json
+{ "merchant": "IKEA 宜家", "amount": "142.60", "currency": "CNY", "category": "HOUSEHOLD", "date": "2026-03-15", "confidence": 0.92 }
+```
+- `amount` is a decimal string, same as Banking Core.
+- `category` is one of `HOUSEHOLD, GROCERIES, TRANSPORT, ENTERTAINMENT, DINING, UNKNOWN`.
+
+The app then lists bank transactions with the same amount, and saves the chosen category with `PATCH /transactions/{id}/category`.
+
 ## Run it
 
 You need Node 18+ and the backend from the repo root (see the main `README.md`).
@@ -68,7 +92,7 @@ Open http://127.0.0.1:5174.
 
 Proxy environment variables (shared by `vite.config.ts` and `server.mjs`):
 
-`CORE_BACKEND_URL`, `AGENT_BACKEND_URL`, `BANKING_SERVICE_TOKEN`, `AGENT_API_TOKEN`, `PORT`, `HOST`, `ALLOWED_ORIGINS`
+`CORE_BACKEND_URL`, `AGENT_BACKEND_URL`, `BANKING_SERVICE_TOKEN`, `AGENT_API_TOKEN`, `RECOGNITION_BACKEND_URL`, `RECOGNITION_TOKEN`, `PORT`, `HOST`, `ALLOWED_ORIGINS`
 
 The tokens are added **on the server**. The browser bundle never contains them.
 

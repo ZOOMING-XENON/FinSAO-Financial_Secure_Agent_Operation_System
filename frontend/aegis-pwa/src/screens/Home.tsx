@@ -6,6 +6,9 @@ import { formatMoney, fromCents, percent, toCents } from '../core/money';
 import { go, useApp, useLoad } from '../app/state';
 import { Amount, Icon, potArt, Skeleton } from '../ui/kit';
 import { TxRow } from '../ui/TxRow';
+import { HeroScene, PersonAvatar } from '../ui/art';
+import { PeopleGrid } from './Pay';
+import { PROFILE } from '../core/people';
 import { loadFreeToSave } from './Pot';
 
 export interface AccountWithBalance extends Account {
@@ -26,7 +29,7 @@ export async function loadRecent(accounts: Account[], limit = 20): Promise<Trans
 }
 
 export function Home() {
-  const { t, locale, toast } = useApp();
+  const { t, lang, locale, toast } = useApp();
   const accounts = useLoad(loadAccounts);
   const recent = useLoad(async () => (accounts.data ? loadRecent(accounts.data, 6) : []), [accounts.data]);
   const subs = useLoad(() => api.get<Subscription[]>('/subscriptions'));
@@ -45,21 +48,29 @@ export function Home() {
   const dueTotal = fromCents(active.reduce((sum, s) => sum + toCents(s.amount), 0n));
   const dueIn = nextDue ? daysUntil(nextDue.next_billing_date) : 0;
 
+  const hour = new Date().getHours();
+  const greet = t(hour < 12 ? 'home.morning' : hour < 18 ? 'home.afternoon' : 'home.evening', { name: lang === 'zh' ? PROFILE.nameZh : PROFILE.name.split(' ')[0] });
+
   return (
     <>
-      <header className="top">
-        <a className="avatar" href="#/me" aria-label={t('nav.me')}>
-          <Icon name="i-user" />
-        </a>
-        <a className="chip ok" href="#/me">
-          <Icon name="i-shield" />
-          {t('home.protected')}
-        </a>
-        <span className="spacer" />
-        <button className="icon-btn brand" aria-label={t('home.send')} onClick={() => go('pay')}>
-          <Icon name="i-plus" />
-        </button>
+      <header className="hero">
+        <HeroScene />
+        <div className="hero-bar">
+          <a className="chip ok" href="#/me">
+            <Icon name="i-shield" />
+            {t('home.protected')}
+          </a>
+          <span className="spacer" />
+          <a href="#/me" aria-label={t('nav.me')}>
+            <PersonAvatar id={PROFILE.key} label={PROFILE.name} size={44} />
+          </a>
+        </div>
+        <div className="hero-hi">
+          <h1>{greet}</h1>
+          <p>{t('brand.tagline')}</p>
+        </div>
       </header>
+      <div className="pad">
 
       <div
         className="carousel"
@@ -108,6 +119,38 @@ export function Home() {
           ))}
         </div>
       )}
+
+      <nav className="tiles" aria-label={t('home.quick')}>
+        <a className="tile" href="#/pay">
+          <span className="sq">
+            <Icon name="i-send" />
+          </span>
+          {t('home.tileSend')}
+        </a>
+        <a className="tile" href="#/track">
+          <span className="sq">
+            <Icon name="i-receipt" />
+          </span>
+          {t('home.tileTrack')}
+        </a>
+        <a className="tile" href="#/pot/new">
+          <span className="sq">
+            <Icon name="i-target" />
+          </span>
+          {t('home.tileSave')}
+        </a>
+        <a className="tile" href="#/trends">
+          <span className="sq">
+            <Icon name="i-cal" />
+          </span>
+          {t('home.tileCalendar')}
+        </a>
+      </nav>
+
+      <div className="sec-h">
+        <h2>{t('home.people')}</h2>
+      </div>
+      <PeopleGrid limit={7} />
 
       <button className="ask" onClick={() => go('aegis')}>
         <span className="orb-sm">
@@ -175,6 +218,7 @@ export function Home() {
           </span>
           <b>{t('home.newPot')}</b>
         </a>
+      </div>
       </div>
     </>
   );
