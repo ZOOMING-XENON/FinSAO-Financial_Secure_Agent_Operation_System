@@ -138,7 +138,7 @@ export interface SavingsPot {
   currency: Currency;
   target_date: string;
   status: string;
-  allocation_mode: 'VIRTUAL_ALLOCATION';
+  allocation_mode: 'ACCOUNT_FUNDED';
   created_at: string;
   updated_at: string;
 }
@@ -146,6 +146,8 @@ export interface SavingsPot {
 export interface SavingsContribution {
   id: string;
   pot_id: string;
+  source_account_id: string | null;
+  transaction_id: string | null;
   amount: Money;
   note: string | null;
   created_at: string;

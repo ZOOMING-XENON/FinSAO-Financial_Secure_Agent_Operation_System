@@ -61,7 +61,7 @@ REQUIRED_SLOTS_BY_INTENT: dict[Intent, tuple[str, ...]] = {
     Intent.SUBSCRIBE_WEALTH: ("account_id", "product_id", "amount"),
     Intent.REDEEM_WEALTH: ("account_id", "product_id", "amount"),
     Intent.CREATE_SAVINGS_POT: ("name", "target_amount", "target_date", "currency"),
-    Intent.CONTRIBUTE_SAVINGS_POT: ("pot_id", "amount"),
+    Intent.CONTRIBUTE_SAVINGS_POT: ("pot_id", "source_account_id", "amount"),
 }
 
 

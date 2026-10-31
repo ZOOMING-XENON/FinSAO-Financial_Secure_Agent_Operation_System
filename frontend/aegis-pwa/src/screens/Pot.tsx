@@ -5,7 +5,9 @@ import { daysUntil, formatDate, monthsUntil } from '../core/format';
 import { formatMoney, fromCents, isValidAmount, normalizeAmount, percent, toCents } from '../core/money';
 import { go, useApp, useLoad } from '../app/state';
 import { Amount, Icon, potArt, Sheet, Skeleton } from '../ui/kit';
+import { useShield } from '../ui/Shield';
 import { askAegis } from './Aegis';
+import { loadAccounts } from './Home';
 
 const ceilDiv = (a: bigint, b: bigint) => (b <= 0n ? a : (a + b - 1n) / b);
 
@@ -218,19 +220,45 @@ function Calculator({ pot, months }: { pot: SavingsPot; months: number }) {
 
 function AddToPot({ pot, open, onClose, onSaved }: { pot: SavingsPot; open: boolean; onClose: () => void; onSaved: () => void }) {
   const { t, errorText, refresh } = useApp();
+  const authorize = useShield();
+  const accounts = useLoad(loadAccounts);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
+  const [sourceId, setSourceId] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const intent = useRef<{ sig: string; key: string } | null>(null);
   const save = async () => {
     if (!isValidAmount(amount)) return setMsg(t('pay.invalidAmount'));
     const value = normalizeAmount(amount);
-    const sig = value + '|' + note;
+    const source = accounts.data?.find(account => account.id === sourceId) ?? accounts.data?.[0];
+    if (!source) return setMsg(t('err.VALIDATION_ERROR'));
+    if (toCents(value) > toCents(source.balance)) return setMsg(t('pay.insufficient'));
+    const sig = source.id + '|' + value + '|' + note;
     if (intent.current?.sig !== sig) intent.current = { sig, key: 'pot-contribution-' + uid() };
     setBusy(true);
+    const ref = await authorize({
+      operationType: 'savings.contribute',
+      operationId: pot.id,
+      targetAccountId: source.id,
+      amount: value,
+      rows: [
+        [t('shield.amount'), formatMoney(value, pot.currency)],
+        [t('shield.from'), `${source.name} · •••• ${source.account_number.slice(-4)}`],
+      ],
+    });
+    if (!ref) {
+      setBusy(false);
+      return;
+    }
     try {
-      await api.post(`/savings-pots/${pot.id}/contributions`, { amount: value, note: note.trim() || null, idempotency_key: intent.current.key });
+      await api.post(`/savings-pots/${pot.id}/contributions`, {
+        source_account_id: source.id,
+        amount: value,
+        note: note.trim() || null,
+        idempotency_key: intent.current.key,
+        authorization_ref: ref,
+      });
       intent.current = null;
       setAmount('');
       setNote('');
@@ -246,6 +274,16 @@ function AddToPot({ pot, open, onClose, onSaved }: { pot: SavingsPot; open: bool
   return (
     <Sheet open={open} onClose={onClose} label={t('pot.addTitle', { name: pot.name })}>
       <h3>{t('pot.addTitle', { name: pot.name })}</h3>
+      <label className="f" htmlFor="ps">
+        {t('shield.from')}
+      </label>
+      <select id="ps" className="input" value={sourceId || accounts.data?.[0]?.id || ''} onChange={e => setSourceId(e.target.value)}>
+        {(accounts.data ?? []).map(account => (
+          <option key={account.id} value={account.id}>
+            {account.name} · {formatMoney(account.balance, account.currency)}
+          </option>
+        ))}
+      </select>
       <label className="f" htmlFor="pa">
         {t('pot.amount')}
       </label>

@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from banking_core.app.domain.enums import Currency, RiskTier, WealthOrderType
+from banking_core.app.domain.enums import AccountStatus, Currency, RiskTier, WealthOrderType
 from banking_core.app.persistence.models import (
     AccountModel,
     ApprovalModel,
@@ -18,6 +18,7 @@ from banking_core.app.persistence.models import (
     CardModel,
     MfaChallengeModel,
     SafetyLockModel,
+    SavingsPotModel,
     SubscriptionModel,
     TransferDraftModel,
     UserModel,
@@ -32,6 +33,13 @@ from banking_core.app.services.errors import (
     NotFoundError,
 )
 from shared.tracing import current_trace_id
+
+
+def _is_expired(expires_at: datetime) -> bool:
+    """SQLite drops timezone metadata; treat its stored timestamps as UTC."""
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return datetime.now(UTC) >= expires_at
 
 
 class ApprovalService:
@@ -84,6 +92,7 @@ class ApprovalService:
         operation_id: UUID,
         actor_id: UUID,
         operation_type: str | None = None,
+        target_account_id: UUID | None = None,
         amount: Decimal | None = None,
     ) -> ApprovalModel:
         if self.session.get(TransferDraftModel, operation_id) is not None:
@@ -96,7 +105,7 @@ class ApprovalService:
         subscription = self.session.get(SubscriptionModel, operation_id)
         action = "subscription.cancel"
         owner_id = subscription.user_id if subscription is not None else None
-        target_account_id: UUID | None = None
+        resolved_target_account_id: UUID | None = None
         currency: Currency | None = None
         resource_id: UUID | None = None
         if subscription is None:
@@ -116,7 +125,7 @@ class ApprovalService:
                     raise AuthorizationError("card limit approval requires exact positive amount")
                 if action != "card.limit":
                     amount = None
-                target_account_id = card.account_id
+                resolved_target_account_id = card.account_id
             else:
                 order = self.session.get(WealthOrderModel, operation_id)
                 if order is not None:
@@ -129,10 +138,32 @@ class ApprovalService:
                         raise AuthorizationError("operation type does not match resource")
                     owner_id = order.user_id
                     action = expected_action
-                    target_account_id = order.account_id
+                    resolved_target_account_id = order.account_id
                     resource_id = order.product_id
                     amount = order.amount
                     currency = order.currency
+                else:
+                    pot = self.session.get(SavingsPotModel, operation_id)
+                    if pot is not None:
+                        action = operation_type or "savings.contribute"
+                        if action != "savings.contribute":
+                            raise AuthorizationError("operation type does not match resource")
+                        if amount is None or amount <= 0 or target_account_id is None:
+                            raise AuthorizationError(
+                                "savings contribution approval requires source account and amount"
+                            )
+                        account = self.session.get(AccountModel, target_account_id)
+                        if (
+                            account is None
+                            or account.user_id != actor_id
+                            or account.is_system
+                            or account.status != AccountStatus.ACTIVE
+                            or account.currency != pot.currency
+                        ):
+                            raise ForbiddenError("source account is unavailable")
+                        owner_id = pot.user_id
+                        resolved_target_account_id = target_account_id
+                        currency = pot.currency
         elif operation_type not in {None, "subscription.cancel"}:
             raise AuthorizationError("operation type does not match resource")
         elif subscription is not None:
@@ -144,7 +175,7 @@ class ApprovalService:
         payload_hash = resource_payload_hash(
             action,
             operation_id,
-            account_id=target_account_id,
+            account_id=resolved_target_account_id,
             resource_id=resource_id,
             amount=amount,
             currency=currency,
@@ -161,13 +192,17 @@ class ApprovalService:
         )
         if existing is not None:
             return existing
-        decision = PolicyEngine(self.session).evaluate(action, actor_id, {}, {})
+        decision = PolicyEngine(self.session).evaluate(
+            action, actor_id, {"amount": amount} if amount is not None else {}, {}
+        )
+        if decision.status == PolicyStatus.DENIED:
+            raise AuthorizationError("operation denied by policy")
         approval = ApprovalModel(
             id=uuid4(),
             actor_user_id=actor_id,
             operation_id=operation_id,
             operation_type=action,
-            target_account_id=target_account_id,
+            target_account_id=resolved_target_account_id,
             amount=amount,
             currency=currency,
             payload_hash=payload_hash,
@@ -188,7 +223,7 @@ class ApprovalService:
             raise ForbiddenError("approval belongs to another user")
         if (
             approval.status == ApprovalStatus.PENDING.value
-            and datetime.now(UTC) >= approval.expires_at
+            and _is_expired(approval.expires_at)
         ):
             approval.status = ApprovalStatus.EXPIRED.value
             self.session.commit()
@@ -231,7 +266,7 @@ class ApprovalService:
             raise ForbiddenError("wrong approval actor")
         if approval.status != ApprovalStatus.PENDING.value:
             raise ConflictError("approval is not pending")
-        if datetime.now(UTC) >= approval.expires_at:
+        if _is_expired(approval.expires_at):
             approval.status = ApprovalStatus.EXPIRED.value
             raise AuthorizationError("approval expired")
 
@@ -278,7 +313,7 @@ class DatabaseTransferAuthorizationVerifier:
             .where(AuthorizationGrantModel.id == grant_id)
             .with_for_update()
         )
-        if grant is None or grant.consumed_at is not None or datetime.now(UTC) >= grant.expires_at:
+        if grant is None or grant.consumed_at is not None or _is_expired(grant.expires_at):
             return False
         current_hash = hashlib.sha256(
             json.dumps(
@@ -347,6 +382,7 @@ def consume_resource_authorization(
     action: str,
     authorization_ref: str,
     amount: Decimal | None = None,
+    account_id: UUID | None = None,
 ) -> bool:
     try:
         grant_id = UUID(authorization_ref)
@@ -386,6 +422,25 @@ def consume_resource_authorization(
             amount=order.amount,
             currency=order.currency,
         )
+    elif action == "savings.contribute":
+        pot = session.get(SavingsPotModel, operation_id)
+        if pot is None or amount is None or account_id is None:
+            return False
+        approval_for_source = session.scalar(
+            select(ApprovalModel).where(ApprovalModel.id == grant.approval_id)
+        ) if grant is not None else None
+        if (
+            approval_for_source is None
+            or approval_for_source.target_account_id != account_id
+        ):
+            return False
+        expected = resource_payload_hash(
+            action,
+            operation_id,
+            account_id=account_id,
+            amount=amount,
+            currency=pot.currency,
+        )
     else:
         expected = resource_payload_hash(action, operation_id)
     if (
@@ -394,7 +449,7 @@ def consume_resource_authorization(
         or grant.operation_id != operation_id
         or grant.payload_hash != expected
         or grant.consumed_at is not None
-        or datetime.now(UTC) >= grant.expires_at
+        or _is_expired(grant.expires_at)
     ):
         return False
     approval = session.get(ApprovalModel, grant.approval_id)
@@ -463,7 +518,7 @@ class MockMfaProvider:
                 raise AuthorizationError("actor is temporarily locked")
             if challenge.verified_at is not None:
                 raise AuthorizationError("MFA challenge already used")
-            if datetime.now(UTC) >= challenge.expires_at:
+            if _is_expired(challenge.expires_at):
                 raise AuthorizationError("MFA challenge expired")
             challenge.attempts += 1
             if not hmac.compare_digest(challenge.code_hash, self._hash(code, challenge.salt)):

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, RootModel
 
-from agent_tools.client import BankingHttpClient
+from agent_tools.client import BankingClientError, BankingHttpClient
 from agent_tools.contracts import BaseBankingTool, ExecutionContext
 from banking_core.app.domain.enums import Currency
 from banking_core.app.domain.money import MoneyDecimal
@@ -25,6 +25,7 @@ class SavingsPotCreateInput(BaseModel):
 
 class SavingsContributionInput(BaseModel):
     pot_id: UUID
+    source_account_id: UUID
     amount: MoneyDecimal
     note: str | None = None
     idempotency_key: str
@@ -50,6 +51,8 @@ class SavingsPotListOutput(BaseModel):
 class SavingsContributionOutput(BaseModel):
     id: UUID
     pot_id: UUID
+    source_account_id: UUID | None
+    transaction_id: UUID | None
     amount: Decimal
     note: str | None
     created_at: datetime
@@ -57,7 +60,7 @@ class SavingsContributionOutput(BaseModel):
 
 class ListSavingsPotsTool(BaseBankingTool[NoInput, SavingsPotListOutput]):
     name = "list_savings_pots"
-    description = "List virtual savings goals"
+    description = "List account-funded savings goals"
     action = "savings.list"
     risk_policy = "GREEN"
     input_model = NoInput
@@ -76,7 +79,7 @@ class ListSavingsPotsTool(BaseBankingTool[NoInput, SavingsPotListOutput]):
 
 class CreateSavingsPotTool(BaseBankingTool[SavingsPotCreateInput, SavingsPotOutput]):
     name = "create_savings_pot"
-    description = "Create a virtual savings goal; no account funds are moved"
+    description = "Create an account-funded savings goal"
     action = "savings.create"
     risk_policy = "GREEN"
     input_model = SavingsPotCreateInput
@@ -102,9 +105,9 @@ class ContributeSavingsPotTool(
     BaseBankingTool[SavingsContributionInput, SavingsContributionOutput]
 ):
     name = "contribute_savings_pot"
-    description = "Record a virtual allocation toward a savings goal; no funds are moved"
+    description = "Move funds from one of the user's accounts into a savings goal"
     action = "savings.contribute"
-    risk_policy = "GREEN"
+    risk_policy = "DYNAMIC"
     input_model = SavingsContributionInput
     output_model = SavingsContributionOutput
 
@@ -116,6 +119,13 @@ class ContributeSavingsPotTool(
     ) -> SavingsContributionOutput:
         values = input_data.model_dump(mode="json")
         pot_id = values.pop("pot_id")
+        if context.authorization_reference is None:
+            raise BankingClientError(
+                "AUTHORIZATION_REQUIRED",
+                "savings contribution authorization is required",
+                403,
+            )
+        values["authorization_ref"] = context.authorization_reference
         return await self.client.request(
             "POST",
             f"/savings-pots/{pot_id}/contributions",

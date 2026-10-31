@@ -140,3 +140,17 @@ uv run ruff check agent banking_core tests
 - **端口已占用**：用 `PORT`、`CORE_BACKEND_URL`、`AGENT_BACKEND_URL` 覆盖默认值。
 
 不要对含有真实银行信息的数据库运行演示重置命令。当前项目只应使用虚构比赛数据。
+on my mac
+cd "/Users/zhexi/Desktop/2026秋/FinSAO-Financial_Secure_Agent_Operation_System"
+source .venv/bin/activate
+uvicorn banking_core.app.main:app --host 127.0.0.1 --port 8000
+cd "/Users/zhexi/Desktop/2026秋/FinSAO-Financial_Secure_Agent_Operation_System"
+source .venv/bin/activate
+uvicorn agent.app:app --host 127.0.0.1 --port 8100
+cd "/Users/zhexi/Desktop/2026秋/FinSAO-Financial_Secure_Agent_Operation_System/frontend/demo-final"
+node server.mjs
+然后访问：
+
+前端：http://127.0.0.1:5173
+Core 健康检查：http://127.0.0.1:8000/health
+Agent 文档：http://127.0.0.1:8100/docs

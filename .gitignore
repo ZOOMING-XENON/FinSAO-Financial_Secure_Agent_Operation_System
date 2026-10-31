@@ -46,6 +46,7 @@ Thumbs.db
 workspace
 frontend-temp
 .tmp
+.impeccable
 
 # Local planning and documentation notes
 frontend.md
