@@ -35,20 +35,25 @@ class SavingsPotResponse(SavingsModel):
     currency: Currency
     target_date: date
     status: str
-    allocation_mode: Literal["VIRTUAL_ALLOCATION"]
+    allocation_mode: Literal["ACCOUNT_FUNDED"]
     created_at: datetime
     updated_at: datetime
 
 
 class SavingsContributionRequest(BaseModel):
+    source_account_id: UUID
     amount: MoneyDecimal = Field(gt=0)
     note: str | None = Field(default=None, max_length=255)
     idempotency_key: str = Field(min_length=1, max_length=120)
+    authorization_ref: UUID
 
 
 class SavingsContributionResponse(SavingsModel):
     id: UUID
     pot_id: UUID
+    # Nullable only for contribution rows created before funded pots were introduced.
+    source_account_id: UUID | None
+    transaction_id: UUID | None
     amount: Decimal
     note: str | None
     created_at: datetime

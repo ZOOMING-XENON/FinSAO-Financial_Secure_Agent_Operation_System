@@ -77,6 +77,19 @@ class PolicyEngine:
                 status=status,
                 reason=f"daily reserved and committed outgoing amount is CNY {cumulative:.2f}",
             )
+        if action == "savings.contribute":
+            amount = Decimal(str(resource.get("amount", "0")))
+            tier = RiskTier.YELLOW if amount <= YELLOW_TRANSFER_LIMIT else RiskTier.RED
+            return PolicyDecision(
+                action=action,
+                risk_tier=tier,
+                status=(
+                    PolicyStatus.REQUIRES_CONFIRMATION
+                    if tier == RiskTier.YELLOW
+                    else PolicyStatus.REQUIRES_MFA
+                ),
+                reason=f"savings contribution amount is CNY {amount:.2f}",
+            )
         if action in yellow:
             return PolicyDecision(
                 action=action,

@@ -221,7 +221,7 @@ class BaselinePlanner:
             Intent.LIST_SAVINGS_POTS: ("list_savings_pots", "读取储蓄罐列表", {}),
             Intent.CREATE_SAVINGS_POT: (
                 "create_savings_pot",
-                "创建虚拟储蓄目标",
+                "创建账户出资型储蓄目标",
                 {
                     "name": "name",
                     "target_amount": "target_amount",
@@ -231,8 +231,12 @@ class BaselinePlanner:
             ),
             Intent.CONTRIBUTE_SAVINGS_POT: (
                 "contribute_savings_pot",
-                "记录虚拟储蓄分配",
-                {"pot_id": "pot_id", "amount": "amount"},
+                "从账户转入储蓄目标",
+                {
+                    "pot_id": "pot_id",
+                    "source_account_id": "source_account_id",
+                    "amount": "amount",
+                },
             ),
         }
         if intent.intent in simple_tools:

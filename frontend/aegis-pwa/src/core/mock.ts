@@ -49,7 +49,7 @@ const db = {
   budgets: [{ id: U(51), category: 'HOUSEHOLD', month: '2026-03-01', limit_amount: '1500.00', currency: 'CNY' }] as Json[],
   pots: [{
     id: U(71), name: 'Demo Travel Fund', target_amount: '8000.00', saved_amount: '2400.00', currency: 'CNY', target_date: '2027-05-01',
-    status: 'ACTIVE', allocation_mode: 'VIRTUAL_ALLOCATION', created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+    status: 'ACTIVE', allocation_mode: 'ACCOUNT_FUNDED', created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
   }] as Json[],
   contributions: [] as Json[],
   drafts: {} as Record<string, Json & { amount: string; source_account_id: string; destination_account_id: string; created: string }>,
@@ -198,11 +198,12 @@ export function mockCore(method: string, path: string, q: Record<string, string>
     const type = draft ? 'transfer.commit' : String(b.operation_type || '');
     let tier: string;
     if (type === 'transfer.commit') tier = todayOutgoing() <= 100000n ? 'YELLOW' : 'RED';
+    else if (type === 'savings.contribute') tier = toCents(String(b.amount)) <= 100000n ? 'YELLOW' : 'RED';
     else if (RED_OPS.has(type)) tier = 'RED';
     else if (YELLOW_OPS.has(type)) tier = 'YELLOW';
     else return err(403, 'AUTHORIZATION_REQUIRED', 'operation denied by policy');
     const ap = {
-      id: rid(), operation_id: op, operation_type: type, target_account_id: draft?.source_account_id ?? null, recipient_id: draft?.destination_account_id ?? null,
+      id: rid(), operation_id: op, operation_type: type, target_account_id: draft?.source_account_id ?? b.target_account_id ?? null, recipient_id: draft?.destination_account_id ?? null,
       amount: draft?.amount ?? (b.amount as string | undefined) ?? null, currency: 'CNY', risk_tier: tier, status: 'PENDING',
       expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
     };
@@ -279,7 +280,7 @@ export function mockCore(method: string, path: string, q: Record<string, string>
     if (db.idem[key]) return [201, db.idem[key]];
     const pot = {
       id: rid(), name: b.name, target_amount: b.target_amount, saved_amount: '0.00', currency: 'CNY', target_date: b.target_date,
-      status: 'ACTIVE', allocation_mode: 'VIRTUAL_ALLOCATION', created_at: now(), updated_at: now(),
+      status: 'ACTIVE', allocation_mode: 'ACCOUNT_FUNDED', created_at: now(), updated_at: now(),
     };
     db.pots.push(pot);
     db.idem[key] = pot;
@@ -289,13 +290,29 @@ export function mockCore(method: string, path: string, q: Record<string, string>
     const pot = db.pots.find(p => p.id === r![1] && p.status !== 'DELETED');
     if (!pot) return err(404, 'NOT_FOUND', 'savings pot not found');
     if (!r[2] && method === 'GET') return [200, pot];
-    if (!r[2] && method === 'DELETE') { pot.status = 'DELETED'; return [204, null]; }
+    if (!r[2] && method === 'DELETE') {
+      if (toCents(String(pot.saved_amount)) > 0n) return err(409, 'CONFLICT', 'funded savings pot cannot be deleted');
+      pot.status = 'DELETED';
+      return [204, null];
+    }
     if (r[2] && method === 'GET') return [200, db.contributions.filter(c => c.pot_id === pot.id).reverse()];
     if (r[2] && method === 'POST') {
       const key = 'contrib:' + b.idempotency_key;
       if (db.idem[key]) return [201, db.idem[key]];
-      const c = { id: rid(), pot_id: pot.id, amount: b.amount, note: b.note ?? null, created_at: now() };
-      pot.saved_amount = fromCents(toCents(String(pot.saved_amount)) + toCents(String(b.amount)));
+      const source = String(b.source_account_id);
+      const amount = toCents(String(b.amount));
+      if (!(source in db.balances)) return err(404, 'NOT_FOUND', 'account not found');
+      const denied = consume(b.authorization_ref, String(pot.id), 'savings.contribute');
+      if (denied) return denied;
+      if (amount > db.balances[source]) return err(409, 'INSUFFICIENT_FUNDS');
+      db.balances[source] -= amount;
+      const transactionId = rid();
+      const c = { id: rid(), pot_id: pot.id, source_account_id: source, transaction_id: transactionId, amount: b.amount, note: b.note ?? null, created_at: now() };
+      db.tx.push({
+        id: transactionId, reference: 'SAV-' + Date.now().toString(36).toUpperCase(), status: 'COMPLETED', amount: fromCents(amount), currency: 'CNY',
+        description: `Savings contribution: ${pot.name}`, category: 'SAVINGS', posted_at: now(), account: source, out: true,
+      });
+      pot.saved_amount = fromCents(toCents(String(pot.saved_amount)) + amount);
       pot.updated_at = now();
       db.contributions.push(c);
       db.idem[key] = c;

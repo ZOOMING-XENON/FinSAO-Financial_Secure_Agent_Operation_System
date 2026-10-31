@@ -314,7 +314,7 @@ class SavingsPotModel(TimestampMixin, Base):
     target_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="ACTIVE", nullable=False)
     allocation_mode: Mapped[str] = mapped_column(
-        String(32), default="VIRTUAL_ALLOCATION", nullable=False
+        String(32), default="ACCOUNT_FUNDED", nullable=False
     )
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
 
@@ -331,6 +331,8 @@ class SavingsContributionModel(Base):
         ForeignKey("savings_pots.id", ondelete="CASCADE"), nullable=False, index=True
     )
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    source_account_id: Mapped[UUID | None] = mapped_column(ForeignKey("accounts.id"))
+    transaction_id: Mapped[UUID | None] = mapped_column(ForeignKey("transactions.id"))
     amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     note: Mapped[str | None] = mapped_column(String(255))
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)

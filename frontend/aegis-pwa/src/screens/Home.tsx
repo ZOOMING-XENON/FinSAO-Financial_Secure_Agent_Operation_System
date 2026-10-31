@@ -9,7 +9,6 @@ import { TxRow } from '../ui/TxRow';
 import { HeroScene, PersonAvatar } from '../ui/art';
 import { PeopleGrid } from './Pay';
 import { PROFILE } from '../core/people';
-import { loadFreeToSave } from './Pot';
 
 export interface AccountWithBalance extends Account {
   balance: string;
@@ -40,7 +39,6 @@ export function Home() {
     if (!latest) return null;
     return { budget: latest, status: await api.get<BudgetStatus>(`/budgets/${latest.id}/status`) };
   });
-  const room = useLoad(loadFreeToSave);
   const [slide, setSlide] = useState(0);
 
   const active = (subs.data ?? []).filter(s => s.active);
@@ -197,9 +195,6 @@ export function Home() {
 
       <div className="card-h" style={{ padding: '10px 4px 8px' }}>
         <h3>{t('home.pots')}</h3>
-        {room.data && toCents(room.data.setAside) > 0n && (
-          <span className="mut small">{t('home.setAside', { aside: formatMoney(room.data.setAside), free: formatMoney(room.data.free) })}</span>
-        )}
       </div>
       <div className="pots">
         {(pots.data ?? []).map(p => (

@@ -16,6 +16,7 @@ class SecurityModel(BaseModel):
 class CreateApprovalRequest(BaseModel):
     operation_id: UUID
     operation_type: str | None = None
+    target_account_id: UUID | None = None
     amount: MoneyDecimal | None = None
 
 

@@ -87,8 +87,10 @@ def contribute_savings_pot(
     item = SavingsPotService(session).contribute(
         pot_id,
         actor,
+        source_account_id=request.source_account_id,
         amount=request.amount,
         note=request.note,
         idempotency_key=request.idempotency_key,
+        authorization_ref=str(request.authorization_ref),
     )
     return SavingsContributionResponse.model_validate(item)

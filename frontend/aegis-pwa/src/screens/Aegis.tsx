@@ -37,6 +37,7 @@ const DIRECT_TOOLS: Record<string, string> = {
   freeze_card: 'card.freeze',
   unfreeze_card: 'card.unfreeze',
   report_card_lost: 'card.report_lost',
+  contribute_savings_pot: 'savings.contribute',
 };
 
 /** Finds the operation the agent is waiting on, so the shield can approve it. */
@@ -49,7 +50,7 @@ export function pendingOperation(task: AgentTask): { type: string; id: string; a
   const type = draftType ?? DIRECT_TOOLS[call.tool_name];
   if (!type) return null;
   const result = task.result ?? {};
-  const id = draftType ? (result.id as string | undefined) : ((args.resource_id ?? args.card_id ?? args.subscription_id) as string | undefined);
+  const id = draftType ? (result.id as string | undefined) : ((args.resource_id ?? args.card_id ?? args.subscription_id ?? args.pot_id) as string | undefined);
   if (!id) return null;
   const amount = (result.amount ?? args.amount ?? args.spending_limit) as string | undefined;
   return { type, id, amount, args };
@@ -182,7 +183,13 @@ export function Aegis() {
       push({ role: 'bot', body: <>{task.public_message}{planSteps(task)}</> });
       const rows: [string, string][] = [[t('shield.action'), task.plan?.goal || op.type]];
       if (op.amount) rows.push([t('shield.amount'), formatMoney(op.amount)]);
-      const ref = await authorize({ operationType: op.type, operationId: op.id, amount: op.amount, rows });
+      const ref = await authorize({
+        operationType: op.type,
+        operationId: op.id,
+        targetAccountId: op.args.source_account_id as string | undefined,
+        amount: op.amount,
+        rows,
+      });
       if (!ref) {
         push({ role: 'bot', body: t('aegis.declined') });
         return;

@@ -11,6 +11,7 @@ import { Icon, Sheet } from './kit';
 export interface ShieldRequest {
   operationType: string;
   operationId: string;
+  targetAccountId?: string;
   amount?: string;
   rows: [string, string][];
 }
@@ -46,6 +47,7 @@ export function ShieldProvider({ children }: { children: ReactNode }) {
         approval = await api.post<Approval>('/security/approvals', {
           operation_id: req.operationId,
           operation_type: req.operationType,
+          ...(req.targetAccountId ? { target_account_id: req.targetAccountId } : {}),
           ...(req.amount ? { amount: req.amount } : {}),
         });
       } catch (e) {

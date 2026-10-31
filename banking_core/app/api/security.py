@@ -29,6 +29,7 @@ def create_approval(
         request.operation_id,
         actor_id,
         operation_type=request.operation_type,
+        target_account_id=request.target_account_id,
         amount=request.amount,
     )
     return ApprovalResponse.model_validate(approval)
