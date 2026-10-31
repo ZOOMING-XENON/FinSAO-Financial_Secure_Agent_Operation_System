@@ -3,7 +3,7 @@ import { api } from '../core/api';
 import type { Account, Balance, Budget, BudgetStatus, SavingsPot, Subscription, Transaction, TransactionPage } from '../core/types';
 import { formatMoney, fromCents, toCents } from '../core/money';
 import { budgetView, buildNudges, currentMonth, summarize, type BudgetView, type Nudge } from '../core/insights';
-import { categoryKey } from '../core/format';
+import { categoryKey, daysUntil } from '../core/format';
 import { PROFILE } from '../core/people';
 import { go, useApp, useLoad } from '../app/state';
 import { Amount, Icon, Skeleton } from '../ui/kit';
@@ -15,10 +15,14 @@ export interface AccountWithBalance extends Account {
   balance: string;
 }
 
+// Banking Core names the seeded accounts in English; show them in the app's language.
+const ACCOUNT_ZH: Record<string, string> = { Checking: '活期账户', Savings: '储蓄账户' };
+
 export async function loadAccounts(): Promise<AccountWithBalance[]> {
   const accounts = await api.get<Account[]>('/accounts');
   const balances = await Promise.all(accounts.map(a => api.get<Balance>(`/accounts/${a.id}/balance`)));
-  return accounts.map((a, i) => ({ ...a, balance: balances[i].balance }));
+  const zh = api.lang === 'zh-CN';
+  return accounts.map((a, i) => ({ ...a, name: zh ? ACCOUNT_ZH[a.name] ?? a.name : a.name, balance: balances[i].balance }));
 }
 
 export async function loadRecent(accounts: Account[], limit = 20): Promise<Transaction[]> {
@@ -72,11 +76,65 @@ export function NudgeCard({ n }: { n: Nudge }) {
   );
 }
 
+const HIDE_KEY = 'aegis.hideBalance';
+function readHidden() {
+  try {
+    return localStorage.getItem(HIDE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** Upcoming subscriptions and bills, soonest first. */
+export function BillsCard({ subs }: { subs: Subscription[] }) {
+  const { t } = useApp();
+  const active = subs.filter(x => x.active).sort((a, b) => a.next_billing_date.localeCompare(b.next_billing_date));
+  if (!active.length) return null;
+  const total = active.reduce((sum, x) => sum + toCents(x.amount), 0n);
+  return (
+    <section className="card flush bills-card">
+      <div className="card-h">
+        <h3>{t('home.bills')}</h3>
+        <a className="link" href="#/insights">
+          {t('ins.subsTotal', { amount: formatMoney(fromCents(total)) })}
+        </a>
+      </div>
+      <div className="bills">
+        {active.slice(0, 4).map(x => {
+          const d = daysUntil(x.next_billing_date);
+          return (
+            <a className={'bill' + (d >= 0 && d <= 3 ? ' soon' : '')} href="#/insights" key={x.id}>
+              <span className="bill-ico">
+                <Icon name="i-repeat" />
+              </span>
+              <b>{x.merchant_name}</b>
+              <span className="amt">{formatMoney(x.amount, x.currency)}</span>
+              <small>{d === 0 ? t('home.today') : d > 0 ? t('home.inDays', { n: d }) : x.next_billing_date}</small>
+            </a>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export function Home() {
   const { t, lang, toast } = useApp();
   const pic = useLoad(loadMoneyPicture);
   const nudges = useNudges(pic.data);
   const [slide, setSlide] = useState(0);
+  const [hidden, setHidden] = useState(readHidden);
+  const toggleHidden = () => {
+    setHidden(h => {
+      try {
+        localStorage.setItem(HIDE_KEY, h ? '0' : '1');
+      } catch {
+        /* storage unavailable */
+      }
+      return !h;
+    });
+  };
+  const mask = <span className="amt masked">¥ ••••••</span>;
   const accounts = pic.data?.accounts;
   const total = fromCents((accounts ?? []).reduce((s, a) => s + toCents(a.balance), 0n));
   const month = pic.data ? summarize(pic.data.tx, currentMonth()) : null;
@@ -100,9 +158,14 @@ export function Home() {
           </a>
         </div>
         <div className="home-total">
-          <span className="hero-t">{t('home.total')}</span>
-          {accounts ? <Amount value={total} className="big" /> : <span className="amt big">…</span>}
-          {month && (month.income > 0n || month.spent > 0n) && (
+          <span className="hero-t total-row">
+            {t('home.total')}
+            <button className="eye" onClick={toggleHidden} aria-pressed={hidden} aria-label={t(hidden ? 'home.showBalance' : 'home.hideBalance')}>
+              <Icon name={hidden ? 'i-eye-off' : 'i-eye'} />
+            </button>
+          </span>
+          {hidden ? <span className="amt big masked">¥ ••••••</span> : accounts ? <Amount value={total} className="big" /> : <span className="amt big">…</span>}
+          {!hidden && month && (month.income > 0n || month.spent > 0n) && (
             <span className={'delta ' + (net >= 0n ? 'up' : 'down')}>
               <Icon name={net >= 0n ? 'i-trend-up' : 'i-trend-down'} />
               {t(net >= 0n ? 'home.netUp' : 'home.netDown', { amount: formatMoney(fromCents(net < 0n ? -net : net)) })}
@@ -134,7 +197,7 @@ export function Home() {
                 <Icon name="i-shield" className="acct-badge" />
               </div>
               <div className="acct-bal">
-                <Amount value={a.balance} currency={a.currency} />
+                {hidden ? mask : <Amount value={a.balance} currency={a.currency} />}
               </div>
             </section>
           ))}
@@ -174,6 +237,12 @@ export function Home() {
           </button>
         </nav>
 
+        <button className="ask" onClick={() => go('aegis')}>
+          <span className="orb-sm" />
+          <span>{t('home.ask')}</span>
+          <Icon name="i-mic" />
+        </button>
+
         {nudges.length > 0 && (
           <>
             <div className="sec-h">
@@ -190,11 +259,7 @@ export function Home() {
           </>
         )}
 
-        <button className="ask" onClick={() => go('aegis')}>
-          <span className="orb-sm" />
-          <span>{t('home.ask')}</span>
-          <Icon name="i-mic" />
-        </button>
+        {pic.data && <BillsCard subs={pic.data.subs} />}
 
         <div className="sec-h">
           <h2>{t('home.people')}</h2>

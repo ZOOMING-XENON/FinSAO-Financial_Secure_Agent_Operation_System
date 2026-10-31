@@ -83,10 +83,10 @@ const db = {
 }
 
 const PRODUCTS = ([
-  ['MMF-01', 'Demo Liquidity Fund 货币基金', 'MONEY_MARKET_FUND', 'GREEN', '100.00', true],
-  ['GOV-01', 'Demo Government Bond 国债', 'GOVERNMENT_BOND', 'GREEN', '1000.00', true],
-  ['BOND-01', 'Demo Steady Bond Fund 债券基金', 'BOND_FUND', 'YELLOW', '1000.00', true],
-  ['FIXED-01', 'Demo Fixed Income Plan 固收计划', 'FIXED_INCOME', 'YELLOW', '5000.00', false],
+  ['MMF-01', 'Demo Liquidity Fund‖演示货币基金', 'MONEY_MARKET_FUND', 'GREEN', '100.00', true],
+  ['GOV-01', 'Demo Government Bond‖演示国债', 'GOVERNMENT_BOND', 'GREEN', '1000.00', true],
+  ['BOND-01', 'Demo Steady Bond Fund‖演示稳健债券基金', 'BOND_FUND', 'YELLOW', '1000.00', true],
+  ['FIXED-01', 'Demo Fixed Income Plan‖演示固收计划', 'FIXED_INCOME', 'YELLOW', '5000.00', false],
 ] as [string, string, string, string, string, boolean][]).map(([code, name, product_type, risk_tier, minimum_amount, supports_redemption], i) => ({
   id: U(60 + i), code: 'DEMO-' + code, name, product_type, risk_tier, minimum_amount, currency: 'CNY', supports_redemption,
 }));
@@ -140,6 +140,14 @@ function spending(year: number, month: number) {
 }
 
 const publicTx = ({ account: _a, out: _o, ...t }: Tx) => t;
+
+/** Demo strings are stored as "English‖中文"; answer in the caller's language like a real API would. */
+export function localizeDemo<T>(value: T, lang: string): T {
+  const zh = lang.toLowerCase().startsWith('zh');
+  const walk = (v: unknown): unknown =>
+    typeof v === 'string' && v.includes('‖') ? v.split('‖')[zh ? 1 : 0] : Array.isArray(v) ? v.map(walk) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v;
+  return walk(value) as T;
+}
 
 export function mockCore(method: string, path: string, q: Record<string, string>, body: unknown, headers: Record<string, string>): Result {
   const b = (body ?? {}) as Json;

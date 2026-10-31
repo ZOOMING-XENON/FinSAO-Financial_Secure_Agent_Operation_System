@@ -118,6 +118,40 @@ export function Insights() {
         </div>
       )}
 
+      <section className="card flush">
+        <div className="card-h">
+          <h3>{t('ins.subs')}</h3>
+          {activeSubs.length > 0 && <span className="mut small">{t('ins.subsTotal', { amount: m$(subsTotal) })}</span>}
+        </div>
+        {subs.length === 0 && <div className="empty">{t('pay.noSubs')}</div>}
+        {subs.map(sub => {
+          const d = daysUntil(sub.next_billing_date);
+          return (
+            <div className="row" key={sub.id}>
+              <span className="ico ENTERTAINMENT">
+                <Icon name="i-repeat" />
+              </span>
+              <span className="main">
+                <span className="t" style={{ display: 'block' }}>
+                  {sub.merchant_name}
+                </span>
+                <span className="s" style={{ display: 'block' }}>
+                  {!sub.active ? t('ins.cancelled') : d >= 0 ? t('ins.renews', { n: d }) : formatDate(sub.next_billing_date, locale)}
+                </span>
+              </span>
+              <span className="v">
+                {m$(toCents(sub.amount))}
+                {sub.active && (
+                  <button className="link block" onClick={() => cancelSub(sub)}>
+                    {t('pay.cancelSub')}
+                  </button>
+                )}
+              </span>
+            </div>
+          );
+        })}
+      </section>
+
       <a className="card cal-cta" href="#/calendar">
         <span className="cal-cta-ico">
           <Icon name="i-cal" />
@@ -240,40 +274,6 @@ export function Insights() {
           ))}
         </section>
       )}
-
-      <section className="card flush">
-        <div className="card-h">
-          <h3>{t('ins.subs')}</h3>
-          {activeSubs.length > 0 && <span className="mut small">{t('ins.subsTotal', { amount: m$(subsTotal) })}</span>}
-        </div>
-        {subs.length === 0 && <div className="empty">{t('pay.noSubs')}</div>}
-        {subs.map(sub => {
-          const d = daysUntil(sub.next_billing_date);
-          return (
-            <div className="row" key={sub.id}>
-              <span className="ico ENTERTAINMENT">
-                <Icon name="i-repeat" />
-              </span>
-              <span className="main">
-                <span className="t" style={{ display: 'block' }}>
-                  {sub.merchant_name}
-                </span>
-                <span className="s" style={{ display: 'block' }}>
-                  {!sub.active ? t('ins.cancelled') : d >= 0 ? t('ins.renews', { n: d }) : formatDate(sub.next_billing_date, locale)}
-                </span>
-              </span>
-              <span className="v">
-                {m$(toCents(sub.amount))}
-                {sub.active && (
-                  <button className="link block" onClick={() => cancelSub(sub)}>
-                    {t('pay.cancelSub')}
-                  </button>
-                )}
-              </span>
-            </div>
-          );
-        })}
-      </section>
 
       <BudgetSheet open={budgetOpen} onClose={() => setBudgetOpen(false)} month={monthKey(month)} onSaved={() => pic.reload()} />
     </>
