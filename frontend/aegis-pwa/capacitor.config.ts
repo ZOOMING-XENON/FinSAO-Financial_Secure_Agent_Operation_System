@@ -7,7 +7,7 @@ const config: CapacitorConfig = {
   appId: 'com.anda.aegis',
   appName: 'Aegis',
   webDir: 'dist',
-  backgroundColor: '#07080f',
+  backgroundColor: '#fff7f0',
   ios: { contentInset: 'never' },
   android: { allowMixedContent: false },
 };

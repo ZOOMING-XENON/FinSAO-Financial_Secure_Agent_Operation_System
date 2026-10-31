@@ -5,6 +5,8 @@ import { formatMoney } from '../core/money';
 import { useApp, useClient, useLoad } from '../app/state';
 import { useShield } from '../ui/Shield';
 import { Badge, Icon, Skeleton } from '../ui/kit';
+import { PersonAvatar } from '../ui/art';
+import { PROFILE } from '../core/people';
 
 export function Me() {
   const { t, lang, setLang, theme, setTheme, toast, errorText, refresh } = useApp();
@@ -35,11 +37,9 @@ export function Me() {
   return (
     <>
       <div className="profile">
-        <span className="avatar">
-          <Icon name="i-user" />
-        </span>
+        <PersonAvatar id={PROFILE.key} label={PROFILE.name} size={64} />
         <div>
-          <h1>{t('me.user')}</h1>
+          <h1>{lang === 'zh' ? `${PROFILE.nameZh} ${PROFILE.name}` : PROFILE.name}</h1>
           <span className="chip ok" style={{ marginTop: 6, height: 28 }}>
             <Icon name="i-shield" />
             {t('home.protected')}
@@ -56,7 +56,7 @@ export function Me() {
           <div key={card.id}>
             <div className={'bank-card' + (card.status !== 'ACTIVE' ? ' frozen' : '')}>
               <div className="brand-row">
-                <span>Aegis</span>
+                <span>{PROFILE.name.toUpperCase()}</span>
                 <Icon name="i-shield" />
               </div>
               <span className="chipx" />
