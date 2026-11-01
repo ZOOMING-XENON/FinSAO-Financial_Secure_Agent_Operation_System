@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     development_user_id: UUID | None = None
     mock_mfa_code: SecretStr | None = None
     banking_service_token: SecretStr = SecretStr("development-only")
+    labeling_service_token: SecretStr = SecretStr("development-labeling-only")
+    labeling_service_user_id: UUID | None = None
 
 
 @lru_cache

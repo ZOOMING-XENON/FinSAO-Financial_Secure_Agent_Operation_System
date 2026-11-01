@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable
 from typing import Any, Protocol
 from uuid import uuid4
@@ -21,10 +22,13 @@ from agent.contracts import (
     TaskPlan,
     TrustedAgentContext,
 )
+from agent.jev_http import JevUnavailable
 from agent.planning import PlanValidationError, PlanVerifier
 from agent.responses import SafeResponseGenerator
 from agent.routing import REQUIRED_SLOTS_BY_INTENT, Intent, IntentResult, Route
 from agent_tools.contracts import ExecutionContext, ToolResult, ToolResultStatus
+
+logger = logging.getLogger(__name__)
 
 
 class Gateway(Protocol):
@@ -37,6 +41,10 @@ class Router(Protocol):
     def route(
         self, text: str, *, conversation: list[Any] | None = None
     ) -> IntentResult | Awaitable[IntentResult]: ...
+
+
+class PlanReviewer(Protocol):
+    async def review_plan(self, text: str, plan: TaskPlan) -> float: ...
 
 
 class Planner(Protocol):
@@ -62,6 +70,8 @@ class AgentService:
         capabilities: CapabilityBroker,
         gateway: Gateway,
         responses: SafeResponseGenerator | None = None,
+        plan_reviewer: PlanReviewer | None = None,
+        plan_review_threshold: float = 0.5,
     ) -> None:
         self._router = router
         self._slots = slots
@@ -70,6 +80,8 @@ class AgentService:
         self._capabilities = capabilities
         self._gateway = gateway
         self._responses = responses or SafeResponseGenerator()
+        self._plan_reviewer = plan_reviewer
+        self._plan_review_threshold = plan_review_threshold
 
     async def handle(self, request: AgentRequest, context: TrustedAgentContext) -> AgentResponse:
         if request.confirmation is not None:
@@ -87,6 +99,17 @@ class AgentService:
             contextual_text, active_conversation = self._active_context(request)
             routed = self._router.route(request.message, conversation=active_conversation)
             intent = await routed if isinstance(routed, Awaitable) else routed
+            if intent.intent == Intent.CORRECT_EXPENSE_CATEGORY:
+                return AgentResponse(
+                    request_id=request.request_id,
+                    session_id=request.session_id,
+                    task_id=context.task_id,
+                    status=AgentResponseStatus.NEEDS_CLARIFICATION,
+                    message=(
+                        "Category correction is available only through the structured "
+                        "transaction view in v1."
+                    ),
+                )
             if intent.intent == Intent.GENERAL_CHAT:
                 return AgentResponse(
                     request_id=request.request_id,
@@ -140,6 +163,35 @@ class AgentService:
                 ),
                 error=AgentError(code=exc.code, message=str(exc)),
             )
+        if self._plan_reviewer is not None:
+            try:
+                review = await self._plan_reviewer.review_plan(request.message, plan)
+            except (JevUnavailable, TimeoutError) as exc:
+                logger.warning("plan review unavailable: %s", type(exc).__name__)
+                return AgentResponse(
+                    request_id=request.request_id,
+                    session_id=request.session_id,
+                    task_id=context.task_id,
+                    status=AgentResponseStatus.NEEDS_CLARIFICATION,
+                    message="计划复核暂不可用，未执行任何操作。",
+                    plan=plan,
+                    error=AgentError(
+                        code="PLAN_REVIEW_UNAVAILABLE",
+                        message="plan review provider unavailable",
+                    ),
+                )
+            if review < self._plan_review_threshold:
+                return AgentResponse(
+                    request_id=request.request_id,
+                    session_id=request.session_id,
+                    task_id=context.task_id,
+                    status=AgentResponseStatus.NEEDS_CLARIFICATION,
+                    message="计划与请求不一致，请补充或明确需求。",
+                    plan=plan,
+                    error=AgentError(
+                        code="PLAN_REVIEW_REJECTED", message="plan review below threshold"
+                    ),
+                )
         execution_context = ExecutionContext(
             authenticated_user_id=context.authenticated_user_id,
             session_id=context.session_id,

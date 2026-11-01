@@ -96,3 +96,19 @@ class TransferReceipt(ApiModel):
 class ErrorResponse(BaseModel):
     code: str
     message: str
+
+class RecentRecipientResponse(ApiModel):
+    destination_account_id: UUID
+    display_name: str
+    masked_account: str
+    last_transfer_at: datetime
+    last_amount: Decimal
+    currency: Currency
+    beneficiary_id: UUID | None = None
+
+class LabelingTransactionResponse(ApiModel):
+    id: UUID
+    description: str
+    category: str | None
+    category_source: str | None
+    category_version: str | None

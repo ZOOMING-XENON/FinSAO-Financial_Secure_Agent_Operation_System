@@ -38,6 +38,26 @@ def get_current_user_id(
     return user_id
 
 
+def get_labeling_worker_id(
+    token: Annotated[str | None, Header(alias="X-Labeling-Token")] = None,
+) -> UUID:
+    """Service-scoped identity for the internal labeling worker."""
+    settings = get_settings()
+    expected = settings.labeling_service_token.get_secret_value()
+    user_id = settings.labeling_service_user_id or settings.development_user_id
+    if (
+        user_id is None
+        or not expected
+        or not token
+        or not hmac.compare_digest(token, expected)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="valid labeling service token is required",
+        )
+    return user_id
+
+
 def get_transfer_verifier(
     session: Annotated[Session, Depends(get_db_session)],
 ) -> TransferAuthorizationVerifier:

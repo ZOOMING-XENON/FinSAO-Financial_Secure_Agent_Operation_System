@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Callable
 from datetime import date
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
@@ -19,9 +19,17 @@ from agent.contracts import (
     TaskPlan,
     TrustLabel,
 )
+from agent.jev_http import JevAdapter, JevUnavailable
 from agent.planning import BaselinePlanner
+from agent.privacy_broker import PrivacyBroker
 from agent.providers import ModelProvider, ProviderError
-from agent.routing import REQUIRED_SLOTS_BY_INTENT, Intent, IntentResult, Route, RuleRouter
+from agent.routing import (
+    CHAT_UNAVAILABLE_INTENTS,
+    REQUIRED_SLOTS_BY_INTENT,
+    Intent,
+    IntentResult,
+    Route,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,30 +63,94 @@ class HybridRouter:
 
     def __init__(
         self,
-        rules: RuleRouter,
+        rules: Any,
         provider: ModelProvider | None,
         *,
         confidence_threshold: float = 0.65,
         routing_mode: str = "hybrid",
         today: Callable[[], date] = date.today,
+        jev_adapter: JevAdapter | None = None,
+        jev_enabled: bool = False,
+        jev_min_confidence: float = 0.8,
+        jev_max_injection: float = 0.03,
+        jev_min_in_scope: float = 0.97,
+        privacy_broker: PrivacyBroker | None = None,
     ) -> None:
         self._rules = rules
         self._provider = provider
         self._confidence_threshold = confidence_threshold
         self._routing_mode = routing_mode
         self._today = today
+        self._jev_adapter = jev_adapter
+        self._jev_enabled = jev_enabled
+        self._jev_min_confidence = jev_min_confidence
+        self._jev_max_injection = jev_max_injection
+        self._jev_min_in_scope = jev_min_in_scope
+        self._privacy_broker = privacy_broker
 
     async def route(
         self, text: str, *, conversation: list[Any] | None = None
     ) -> IntentResult:
-        deterministic = self._rules.route(text, conversation=conversation)
+        deterministic = cast(IntentResult, self._rules.route(text, conversation=conversation))
         if self._routing_mode == "hybrid" and deterministic.route != Route.SAFE_FALLBACK:
             return deterministic
         if "instruction marker" in deterministic.reason:
             return deterministic
+
+        model_text = text
+        model_conversation = list(conversation or [])
+        if self._privacy_broker is not None:
+            try:
+                tokenized = self._privacy_broker.tokenize(text)
+                model_text = tokenized.text
+                model_conversation = [
+                    message.model_copy(
+                        update={
+                            "content": self._privacy_broker.tokenize(message.content).text
+                        }
+                    )
+                    for message in model_conversation
+                ]
+            except ValueError:
+                return self._unavailable_fallback(deterministic)
+
+        if (
+            self._routing_mode == "hybrid"
+            and self._jev_enabled
+            and self._jev_adapter is not None
+            and self._jev_adapter.available
+        ):
+            try:
+                observation = await self._jev_adapter.classify(model_text)
+            except JevUnavailable:
+                observation = None
+            if (
+                observation is not None
+                and observation.injection_probability <= self._jev_max_injection
+                and observation.in_scope_probability >= self._jev_min_in_scope
+                and observation.confidence >= self._jev_min_confidence
+                and observation.order_consistent
+                and observation.intent not in CHAT_UNAVAILABLE_INTENTS
+                and observation.intent not in {Intent.UNKNOWN, Intent.GENERAL_CHAT}
+            ):
+                return IntentResult(
+                    intent=observation.intent,
+                    complexity=3,
+                    confidence=observation.confidence,
+                    route=Route.PLANNER,
+                    reason=f"jev:{observation.model}",
+                    required_slots=list(
+                        REQUIRED_SLOTS_BY_INTENT.get(observation.intent, ())
+                    ),
+                )
+
         if self._provider is None or not self._provider.available:
             return self._unavailable_fallback(deterministic)
-        supported = ", ".join(intent.value for intent in Intent if intent != Intent.UNKNOWN)
+        supported = ", ".join(
+            intent.value
+            for intent in Intent
+            if intent != Intent.UNKNOWN and intent not in CHAT_UNAVAILABLE_INTENTS
+        )
         today = self._today().isoformat()
         messages = [
             ConversationMessage(
@@ -104,8 +176,8 @@ class HybridRouter:
                     f"支持的 intent: {supported}。"
                 ),
             ),
-            *(conversation or [])[-10:],
-            ConversationMessage(role=ConversationRole.USER, content=text),
+            *model_conversation[-10:],
+            ConversationMessage(role=ConversationRole.USER, content=model_text),
         ]
         try:
             generated = await self._provider.generate_structured(

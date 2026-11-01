@@ -252,6 +252,7 @@ class CreateTransferDraftTool(BaseBankingTool[CreateTransferDraftInput, Transfer
         "YELLOW_OR_RED",
     )
     input_model, output_model = CreateTransferDraftInput, TransferDraftOutput
+    mutates_data = True
 
     def __init__(self, client: BankingHttpClient) -> None:
         self.client = client
@@ -299,6 +300,7 @@ class CommitTransferTool(BaseBankingTool[CommitTransferInput, TransferReceiptOut
         "YELLOW_OR_RED",
     )
     input_model, output_model = CommitTransferInput, TransferReceiptOutput
+    mutates_data = True
 
     def __init__(self, client: BankingHttpClient) -> None:
         self.client = client
@@ -332,6 +334,7 @@ def register_default_tools(registry: ToolRegistry, client: BankingHttpClient) ->
         GetBalanceTool(client),
         GetTransactionsTool(client),
         ListBeneficiariesTool(client),
+        ListRecentRecipientsTool(client),
         ResolveBeneficiaryTool(client),
         CreateTransferDraftTool(client),
         GetTransferStatusTool(client),
@@ -345,3 +348,57 @@ def register_default_tools(registry: ToolRegistry, client: BankingHttpClient) ->
         registry.register(tool)
     for tool in savings_tools(client):
         registry.register(tool)
+
+class RecentRecipientsInput(BaseModel):
+    start: datetime | None = None
+    end: datetime | None = None
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class RecentRecipientItem(BaseModel):
+    destination_account_id: UUID
+    display_name: str
+    masked_account: str
+    last_transfer_at: datetime
+    last_amount: Decimal
+    currency: Currency
+    beneficiary_id: UUID | None = None
+
+
+class RecentRecipientsOutput(BaseModel):
+    items: list[RecentRecipientItem]
+
+
+class ListRecentRecipientsTool(
+    BaseBankingTool[RecentRecipientsInput, RecentRecipientsOutput]
+):
+    name = "list_recent_recipients"
+    description = "List recently paid recipients"
+    action = "beneficiaries.recent"
+    risk_policy = "GREEN"
+    input_model = RecentRecipientsInput
+    output_model = RecentRecipientsOutput
+
+    def __init__(self, client: BankingHttpClient) -> None:
+        self.client = client
+
+    async def execute(
+        self, input_data: RecentRecipientsInput, context: ExecutionContext
+    ) -> RecentRecipientsOutput:
+        params: dict[str, str | int | float | bool | None] = {
+            "limit": input_data.limit
+        }
+        if input_data.start is not None:
+            params["start"] = input_data.start.isoformat()
+        if input_data.end is not None:
+            params["end"] = input_data.end.isoformat()
+        from pydantic import RootModel
+
+        response = await self.client.request(
+            "GET",
+            "/recipients/recent",
+            context,
+            RootModel[list[RecentRecipientItem]],
+            params=params,
+        )
+        return RecentRecipientsOutput(items=response.root)

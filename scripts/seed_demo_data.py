@@ -93,6 +93,9 @@ def add_posting(
             currency=Currency.CNY,
             description=description,
             category=category,
+            category_source="RULE",
+            category_version="seed-v1",
+            category_labeled_at=posted_at,
             posted_at=posted_at,
         ),
     )

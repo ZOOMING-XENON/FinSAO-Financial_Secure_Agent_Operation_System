@@ -549,7 +549,9 @@ API 错误统一为 `{ "code": "...", "message": "..." }`。金额在 JSON 中�
 | `test_agent_routing_planning.py` | Intent、Slot、能力最小化和 PlanVerifier |
 | `test_agent_graph.py` | LangGraph 中断、恢复和状态变化 |
 | `test_agent_api.py` | Agent HTTP API、任务和认证 |
-| `test_jev_boundary.py` | 可选 Jev 的超时、熔断和权限边界 |
+| `test_jev_http.py` / `test_jev_routing.py` | Jev HTTP 契约、路由、熔断与 pass-2 veto |
+| `test_privacy_broker.py` / `test_expense_labeling.py` | 隐私脱敏、描述白名单和异步标注 |
+| `test_expense_tracking.py` | 消费查询、排序、汇总、工具与 intent |
 | `test_banking_dataset.py` | 数据集生成、校验和评分 |
 | `test_task1027_runtime.py` | 多轮表单、敏感信息、服务令牌、储蓄罐、收款人和当前集成功能 |
 | `test_postgres_integration.py` | 真实 PostgreSQL 下的迁移、并发、ledger、审批和幂等集成测试 |

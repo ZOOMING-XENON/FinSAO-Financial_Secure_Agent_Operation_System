@@ -115,6 +115,45 @@ class BaselinePlanner:
                 )
             )
             return TaskPlan(goal="查询余额并创建转账草稿", steps=steps)
+        if intent.intent in {Intent.TRACK_EXPENSES, Intent.SUMMARIZE_EXPENSES}:
+            tool_name = (
+                "get_expenses"
+                if intent.intent == Intent.TRACK_EXPENSES
+                else "summarize_expenses"
+            )
+            allowed = {
+                "account_id",
+                "start",
+                "end",
+                "category",
+                "merchant",
+                "minimum_amount",
+                "maximum_amount",
+                "sort_by",
+                "sort_direction",
+                "limit",
+                "offset",
+            }
+            arguments = {
+                name: fact.value
+                for name, fact in slots.facts.items()
+                if name in allowed
+            }
+            sources = {
+                name: self._argument_source(slots.facts[name]) for name in arguments
+            }
+            return TaskPlan(
+                goal="查询消费记录" if tool_name == "get_expenses" else "汇总消费记录",
+                steps=[
+                    PlanStep(
+                        step_id=tool_name,
+                        purpose="查询消费记录",
+                        tool_call=ToolCall(tool_name=tool_name, arguments=arguments),
+                        argument_sources=sources,
+                    )
+                ],
+            )
+
         simple_tools: dict[Intent, tuple[str, str, dict[str, str]]] = {
             Intent.ANALYZE_SPENDING: (
                 "analyze_spending",

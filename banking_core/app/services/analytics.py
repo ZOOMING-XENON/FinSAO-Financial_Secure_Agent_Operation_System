@@ -26,6 +26,7 @@ from banking_core.app.services.errors import (
     ForbiddenError,
     NotFoundError,
 )
+from shared.expense_taxonomy import normalize_category
 from shared.tracing import current_trace_id
 
 BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
@@ -92,7 +93,10 @@ class BillAnalysisService:
         )
         if transaction is None:
             raise NotFoundError("transaction not found")
-        transaction.category = category.strip().upper()
+        transaction.category = normalize_category(category)
+        transaction.category_source = "USER"
+        transaction.category_version = "user"
+        transaction.category_labeled_at = datetime.now(UTC)
         self.session.commit()
         return transaction
 
