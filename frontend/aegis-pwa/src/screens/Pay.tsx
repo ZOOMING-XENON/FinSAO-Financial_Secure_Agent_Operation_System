@@ -120,7 +120,13 @@ export function Pay({ preselect }: { preselect?: string }) {
       <AmountStep
         to={to}
         accounts={accounts.data}
-        onBack={() => setTo(null)}
+        // Opened for a person (#/pay/<id>): go back to where they came from, otherwise the
+        // preselect effect would pick the same person again straight away.
+        onBack={() => {
+          if (!preselect) return setTo(null);
+          if (window.history.length > 1) window.history.back();
+          else go('pay');
+        }}
         onSent={r => {
           refresh();
           setReceipt({ r, name: to.name });

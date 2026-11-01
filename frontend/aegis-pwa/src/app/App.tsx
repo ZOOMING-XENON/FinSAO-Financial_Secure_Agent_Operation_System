@@ -1,3 +1,4 @@
+import { Inbox } from '../screens/Inbox';
 import { useEffect, useState } from 'react';
 import { api } from '../core/api';
 import { AppProvider, useApp, useClient, useHashRoute } from './state';
@@ -74,6 +75,9 @@ function Shell() {
     case 'me':
       view = <Me />;
       break;
+    case 'inbox':
+      view = <Inbox />;
+      break;
     case 'activity':
       view = <Activity />;
       break;
@@ -91,7 +95,7 @@ function Shell() {
       view = <Home />;
       mainClass = 'home';
   }
-  const parentTab: Record<string, string> = { pot: 'services', wealth: 'services', ledger: 'services', me: 'services', calendar: 'insights', trends: 'insights', track: 'services', activity: 'home', pay: 'home' };
+  const parentTab: Record<string, string> = { pot: 'services', wealth: 'services', ledger: 'services', me: 'services', calendar: 'insights', trends: 'insights', track: 'services', activity: 'home', pay: 'home', inbox: 'home' };
   const activeTab = parentTab[route] ?? (TABS.some(x => x.id === route) ? route : 'home');
 
   return (

@@ -30,6 +30,8 @@ export interface Transaction {
   description: string;
   category: string | null;
   posted_at: string | null;
+  /** Set only on cash-ledger entries shown alongside bank transactions: the ledger category id. */
+  cash?: string;
 }
 
 export interface TransactionPage {
