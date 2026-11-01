@@ -229,9 +229,16 @@ class HybridRouter:
 class HybridPlanner:
     """Generate a candidate DAG with the LLM, then leave execution to PlanVerifier."""
 
-    def __init__(self, baseline: BaselinePlanner, provider: ModelProvider | None) -> None:
+    def __init__(
+        self,
+        baseline: BaselinePlanner,
+        provider: ModelProvider | None,
+        *,
+        privacy_broker: PrivacyBroker | None = None,
+    ) -> None:
         self._baseline = baseline
         self._provider = provider
+        self._privacy_broker = privacy_broker
 
     async def create(
         self,
@@ -242,7 +249,11 @@ class HybridPlanner:
         request: AgentRequest | None = None,
         allowed_tools: list[dict[str, object]] | None = None,
     ) -> TaskPlan:
-        if not intent.reason.startswith("llm:") or self._provider is None or request is None:
+        if (
+            not intent.reason.startswith(("llm:", "jev:"))
+            or self._provider is None
+            or request is None
+        ):
             return self._baseline.create(
                 intent,
                 slots,
@@ -267,7 +278,14 @@ class HybridPlanner:
                     f"{tool_json}\n可信槽位：{fact_json}"
                 ),
             ),
-            ConversationMessage(role=ConversationRole.USER, content=request.message),
+            ConversationMessage(
+                role=ConversationRole.USER,
+                content=(
+                    self._privacy_broker.tokenize(request.message).text
+                    if self._privacy_broker is not None
+                    else request.message
+                ),
+            ),
         ]
         try:
             generated = await self._provider.generate_structured(

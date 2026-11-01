@@ -1,7 +1,7 @@
 from functools import lru_cache
 from uuid import UUID
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     banking_service_token: SecretStr = SecretStr("development-only")
     labeling_service_token: SecretStr = SecretStr("development-labeling-only")
     labeling_service_user_id: UUID | None = None
+
+    @field_validator("labeling_service_user_id", "development_user_id", mode="before")
+    @classmethod
+    def empty_uuid_as_none(cls, value: object) -> object:
+        return None if value == "" else value
 
 
 @lru_cache

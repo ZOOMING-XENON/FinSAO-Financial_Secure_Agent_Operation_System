@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 from collections.abc import AsyncIterator
@@ -20,7 +21,12 @@ from agent.capabilities import CapabilityBroker
 from agent.checkpoints import AsyncFromSyncPostgresSaver
 from agent.config import AgentSettings, get_agent_settings
 from agent.context import SlotTracker
-from agent.contracts import AgentRequest, AgentResponse, TrustedAgentContext
+from agent.contracts import (
+    AgentRequest,
+    AgentResponse,
+    AgentResponseStatus,
+    TrustedAgentContext,
+)
 from agent.durable import DurableEvent, DurableTask, DurableTaskManager, ResumeRequest
 from agent.expenses import ExpenseRouter
 from agent.factory import build_model_provider
@@ -35,6 +41,7 @@ from agent.proactive import (
     ProactiveSubscription,
     ProactiveSuggestion,
 )
+from agent.review import PrivacyPreservingReviewer
 from agent.routing import RuleRouter
 from agent.service import AgentService
 from agent_persistence import SqlAlchemyTaskStore
@@ -76,12 +83,19 @@ _service = AgentService(
         privacy_broker=_privacy_broker,
     ),
     slots=SlotTracker(),
-    planner=HybridPlanner(BaselinePlanner(), _model_provider),
+    planner=HybridPlanner(
+        BaselinePlanner(), _model_provider, privacy_broker=_privacy_broker
+    ),
     verifier=PlanVerifier(_registry),
     capabilities=CapabilityBroker(_registry),
     gateway=_gateway,
     plan_reviewer=(
-        _jev_adapter
+        PrivacyPreservingReviewer(_jev_adapter, _privacy_broker)
+        if _settings.jev_enabled
+        and _settings.jev_pass2_enabled
+        and _jev_adapter is not None
+        and _privacy_broker is not None
+        else _jev_adapter
         if _settings.jev_enabled and _settings.jev_pass2_enabled
         else None
     ),
@@ -169,7 +183,19 @@ async def create_agent_request(
         task_id=uuid4(),
         trace_id=trace_id,
     )
-    return await service.handle(request, context)
+    try:
+        return await asyncio.wait_for(
+            service.handle(request, context),
+            timeout=_settings.request_deadline_seconds,
+        )
+    except TimeoutError:
+        return AgentResponse(
+            request_id=request.request_id,
+            session_id=request.session_id,
+            task_id=context.task_id,
+            status=AgentResponseStatus.NEEDS_CLARIFICATION,
+            message="Request deadline exceeded; no action was executed.",
+        )
 
 
 @app.post("/agent/tasks", response_model=DurableTask)
@@ -189,7 +215,16 @@ async def create_task(
         task_id=uuid4(),
         trace_id=trace_id,
     )
-    return await manager.create(request, context)
+    try:
+        return await asyncio.wait_for(
+            manager.create(request, context),
+            timeout=_settings.request_deadline_seconds,
+        )
+    except TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail={"code": "REQUEST_DEADLINE_EXCEEDED"},
+        ) from None
 
 
 @app.get("/agent/tasks/{task_id}", response_model=DurableTask)

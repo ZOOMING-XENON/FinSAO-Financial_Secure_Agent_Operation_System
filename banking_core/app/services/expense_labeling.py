@@ -20,6 +20,7 @@ from shared.expense_taxonomy import normalize_category
 PRECEDENCE = {"USER": 3, "RULE": 2, "JEV": 1}
 LABEL_POLICY_VERSION = "jev-label-v1"
 LEASE_DURATION = timedelta(minutes=5)
+MAX_ATTEMPTS = 5
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,16 @@ class ExpenseLabelingService:
                     AccountModel.user_id == user_id,
                     LedgerEntryModel.credit > 0,
                     TransactionModel.status == TransactionStatus.COMPLETED,
-                    TransactionModel.category_source.is_(None),
+                    or_(
+                        TransactionModel.category_source.is_(None),
+                        and_(
+                            TransactionModel.category_source == "RULE",
+                            or_(
+                                TransactionModel.category.is_(None),
+                                TransactionModel.category == "UNKNOWN",
+                            ),
+                        ),
+                    ),
                     or_(
                         ExpenseLabelAttemptModel.id.is_(None),
                         ExpenseLabelAttemptModel.status == "PENDING",
@@ -152,9 +162,18 @@ class ExpenseLabelingService:
             )
             self.session.add(row)
         row.attempt_count += 1
-        row.status = "SUCCEEDED" if attempt.succeeded else "RETRY"
+        if attempt.succeeded:
+            row.status = "SUCCEEDED"
+        elif row.attempt_count >= MAX_ATTEMPTS:
+            row.status = "DEAD_LETTER"
+        else:
+            row.status = "RETRY"
         row.last_error = None if attempt.succeeded else (attempt.error or "label unavailable")[:120]
-        row.next_attempt_at = None if attempt.succeeded else datetime.now(UTC) + LEASE_DURATION
+        row.next_attempt_at = (
+            None
+            if attempt.succeeded or row.status == "DEAD_LETTER"
+            else datetime.now(UTC) + LEASE_DURATION
+        )
         row.lease_until = None
         self.session.commit()
         return row

@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,6 +52,11 @@ class AgentSettings(BaseSettings):
         validation_alias=AliasChoices("AGENT_DATABASE_URL", "DATABASE_URL"),
     )
     agent_checkpoint_database_url: str | None = None
+
+    @field_validator("agent_development_user_id", mode="before")
+    @classmethod
+    def empty_uuid_as_none(cls, value: object) -> object:
+        return None if value == "" else value
 
 
 @lru_cache
