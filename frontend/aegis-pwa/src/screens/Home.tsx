@@ -12,6 +12,9 @@ import { displayName, useProfile } from '../core/profile';
 import { PeopleStrip } from './Pay';
 import { BankCard } from '../ui/BankCard';
 import { setPendingReceipts } from '../core/recognition';
+import { withCash } from '../core/ledger';
+import { useSeen } from '../core/inbox';
+import { useInbox } from './Inbox';
 import type { Card } from '../core/types';
 
 export interface AccountWithBalance extends Account {
@@ -45,7 +48,8 @@ export async function loadBudgetViews(): Promise<BudgetView[]> {
 export async function loadMoneyPicture() {
   const accounts = await loadAccounts();
   const [tx, budgets, subs, pots] = await Promise.all([
-    loadRecent(accounts, 200),
+    // Cash-ledger entries count too, so Home, Analytics and the calendar agree with the ledger.
+    loadRecent(accounts, 200).then(withCash),
     loadBudgetViews(),
     api.get<Subscription[]>('/subscriptions'),
     api.get<SavingsPot[]>('/savings-pots'),
@@ -126,6 +130,9 @@ export function Home() {
   const pic = useLoad(loadMoneyPicture);
   const cards = useLoad(() => api.get<Card[]>('/cards'));
   const nudges = useNudges(pic.data);
+  const inbox = useInbox(pic.data);
+  const seen = useSeen();
+  const unread = inbox.filter(x => !seen.has(x.id)).length;
   const [hidden, setHidden] = useState(readHidden);
   const profile = useProfile();
   const [front, setFront] = useState(0);
@@ -160,8 +167,9 @@ export function Home() {
             <b>{name}</b>
           </span>
           <span className="spacer" />
-          <a className="icon-btn" href="#/insights" aria-label={t('home.forYou')}>
+          <a className="icon-btn bell" href="#/inbox" aria-label={unread ? t('inbox.unread', { n: unread }) : t('inbox.title')}>
             <Icon name="i-bell" />
+            {unread > 0 && <span className="bell-dot">{unread > 9 ? '9+' : unread}</span>}
           </a>
           <label className="icon-btn scan-btn" aria-label={t('home.tileScan')}>
             <Icon name="i-scan" />

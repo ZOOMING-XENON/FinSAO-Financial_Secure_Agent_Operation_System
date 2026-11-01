@@ -74,6 +74,12 @@ function tidyName(s: string): string {
 const wordy = (l: string) => /[一-鿿]{2,}|[A-Za-z]{3,}/.test(l);
 const hasDate = (l: string) => DATE_FULL.test(l) || TIME_ONLY.test(l) || /\d{1,2}:\d{2}(:\d{2})?/.test(l);
 
+/** Phone status bars and order numbers ("15:10 7 all 56 ©)"): a clock, or mostly digits and symbols. */
+function junkName(l: string): boolean {
+  const letters = (l.match(/[\p{L}]/gu) ?? []).length;
+  return hasDate(l) || letters / l.length < 0.5 || /\b(all|ill|lte|5g|4g|wifi)\b/i.test(l) && /\d/.test(l);
+}
+
 function guessMerchant(lines: string[]): string {
   for (const l of lines) {
     const m = l.match(LABELED);
@@ -87,10 +93,8 @@ function guessMerchant(lines: string[]): string {
   let bestScore = -Infinity;
   lines.slice(0, 8).forEach((raw, i) => {
     const l = tidyName(raw);
-    if (!wordy(l) || l.length > 36 || NOISE.test(l) || TOTAL.test(l) || hasDate(l) || amountsIn(l).length) return;
-    // Mostly digits or symbols (order numbers, phone numbers, bars of dashes) is not a name.
+    if (!wordy(l) || l.length > 36 || NOISE.test(l) || TOTAL.test(l) || amountsIn(l).length || junkName(l)) return;
     const letters = (l.match(/[\p{L}]/gu) ?? []).length;
-    if (letters / l.length < 0.5) return;
     const score = (SHOP_WORD.test(l) ? 3 : 0) - i * 0.6 + Math.min(letters, 12) * 0.05;
     if (score > bestScore) {
       best = l;
@@ -183,7 +187,7 @@ export function parseReceipts(text: string, now = new Date()): ParsedReceipt[] {
     const m = l.match(LIST_ROW);
     if (m) {
       const name = tidyName(m[1]);
-      if (wordy(name) && !TOTAL.test(name) && !SUBTOTAL.test(name)) rows.push({ i, name, sign: m[2], amount: toAmount(m[3]) });
+      if (wordy(name) && !junkName(name) && !TOTAL.test(name) && !SUBTOTAL.test(name)) rows.push({ i, name, sign: m[2], amount: toAmount(m[3]) });
     }
   });
   if (rows.length < 2) {

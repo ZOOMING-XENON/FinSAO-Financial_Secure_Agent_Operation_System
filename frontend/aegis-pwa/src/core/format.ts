@@ -54,3 +54,8 @@ export function hashIndex(text: string, n: number): number {
   for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) >>> 0;
   return h % n;
 }
+
+/** A transaction's display name; cash-ledger entries without a note use their category name. */
+export function txTitle(tx: Transaction, t: (key: never) => string): string {
+  return tx.description || (tx.cash ? (t as (k: string) => string)(`led.c.${tx.cash}`) : '');
+}

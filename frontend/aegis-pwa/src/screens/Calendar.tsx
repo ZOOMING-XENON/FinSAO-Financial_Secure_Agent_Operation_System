@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { api } from '../core/api';
 import { CATEGORIES, type Transaction } from '../core/types';
-import { categoryKey, direction } from '../core/format';
+import { categoryKey, direction, txTitle } from '../core/format';
+import { withCash } from '../core/ledger';
 import { formatMoney, fromCents, isValidAmount, normalizeAmount, toCents } from '../core/money';
 import { useApp, useLoad } from '../app/state';
 import { Icon, Sheet, Skeleton } from '../ui/kit';
@@ -102,7 +103,7 @@ export function DayView({ tx, day, onDay }: { tx: Transaction[]; day: Date; onDa
                     return (
                       <div className={'tl-card ' + dir} key={x.id}>
                         <div className="tl-top">
-                          <b>{x.description}</b>
+                          <b>{txTitle(x, t)}</b>
                           <span className={'amt' + (dir === 'in' ? ' pos' : '')}>
                             {dir === 'in' ? '+' : dir === 'out' ? '-' : ''}
                             {formatMoney(x.amount, x.currency)}
@@ -110,6 +111,7 @@ export function DayView({ tx, day, onDay }: { tx: Transaction[]; day: Date; onDa
                         </div>
                         <div className="tl-meta">
                           <Icon name={dir === 'in' ? 'c-IN' : dir === 'move' ? 'c-MOVE' : 'c-' + c} />
+                          {x.cash ? `${t('tx.cash')} · ` : ''}
                           {dir === 'in' ? t('tx.in') : dir === 'move' ? t('tx.move') : t(`cat.${c}`)}
                           <span className="spacer" />
                           <Icon name="i-clock" />
@@ -131,7 +133,7 @@ export function DayView({ tx, day, onDay }: { tx: Transaction[]; day: Date; onDa
 export function Calendar() {
   const { t } = useApp();
   const [day, setDay] = useState(() => new Date());
-  const allTx = useLoad(async () => loadRecent(await loadAccounts(), 200));
+  const allTx = useLoad(async () => withCash(await loadRecent(await loadAccounts(), 200)));
   return (
     <>
       <div className="ph">

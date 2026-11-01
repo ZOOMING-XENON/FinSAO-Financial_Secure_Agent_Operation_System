@@ -2,10 +2,11 @@ import { useApp, useLoad } from '../app/state';
 import { Icon, Skeleton } from '../ui/kit';
 import { TxRow } from '../ui/TxRow';
 import { loadAccounts, loadRecent } from './Home';
+import { withCash } from '../core/ledger';
 
 export function Activity() {
   const { t } = useApp();
-  const tx = useLoad(async () => loadRecent(await loadAccounts(), 100));
+  const tx = useLoad(async () => withCash(await loadRecent(await loadAccounts(), 100)));
   return (
     <>
       <div className="ph">

@@ -80,3 +80,9 @@ test('reads 一 as a minus sign and still finds the rows when the date lines are
     ['永辉超市', '86.40', 'GROCERIES'],
   ]);
 });
+
+test('ignores the phone status bar at the top of a screenshot', () => {
+  const r = parseReceipt('15:10 7 all 56 ©)\nLawson 罗森\n饭团 Onigiri 8.50\n合计 21.40');
+  assert.equal(r.merchant, 'Lawson 罗森');
+  assert.equal(r.category, 'GROCERIES');
+});

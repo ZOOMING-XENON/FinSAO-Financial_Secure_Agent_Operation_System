@@ -54,6 +54,7 @@ export function summarize(tx: Transaction[], m: Month): MonthSummary {
       daily[d.getDate() - 1] += c;
       const k = categoryKey(t.category);
       byCategory[k] = (byCategory[k] ?? 0n) + c;
+      if (!t.description) continue; // cash entry without a note
       const e = merch.get(t.description) ?? { cents: 0n, count: 0 };
       e.cents += c;
       e.count++;

@@ -63,6 +63,12 @@ export function buildDemo(today = new Date()) {
     if (r() < 0.03) add(d, 16, yuan(r, 20, 80), 'UNKNOWN', 'Card payment‖刷卡消费');
   }
 
+  // Monthly fund dividend (added after the main loop so the rest of the demo data stays the same).
+  for (let back = 92; back >= 0; back--) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - back);
+    if (d.getDate() === 28) add(d, 9, yuan(r, 60, 120), 'INTEREST', 'Dividend · Demo Steady Bond Fund‖基金分红 · 演示稳健债券基金', false);
+  }
+
   const inCents = tx.filter(t => !t.out).reduce((s, t) => s + toCents(t.amount), 0n);
   const outCents = tx.filter(t => t.out).reduce((s, t) => s + toCents(t.amount), 0n);
 
