@@ -66,5 +66,13 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Aegis uses the camera to photograph receipts. The photo is read on your phone and never uploaded.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Aegis opens your photo library so you can pick receipts, payment screenshots or a profile picture. Pictures stay on your phone.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Aegis listens when you tap the voice button so you can talk to your money assistant.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Aegis turns what you say into text so it can answer your question.</string>
 </dict>
 </plist>

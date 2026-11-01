@@ -2,6 +2,8 @@ import { useState } from 'react';
 import type { Key } from '../core/i18n';
 import { go, useApp } from '../app/state';
 import { Icon } from '../ui/kit';
+import { ProfileAvatar } from '../ui/art';
+import { displayName, useProfile } from '../core/profile';
 
 type Group = 'account' | 'savings' | 'transfer' | 'card' | 'payment' | 'wealth' | 'ledger';
 interface Service {
@@ -40,7 +42,9 @@ const SERVICES: Service[] = [
 const GROUPS: Group[] = ['account', 'savings', 'transfer', 'card', 'payment', 'wealth', 'ledger'];
 
 export function Services() {
-  const { t, toast } = useApp();
+  const { t, toast, lang } = useApp();
+  const profile = useProfile();
+  const me = displayName(profile, lang);
   const [q, setQ] = useState('');
   const [group, setGroup] = useState<Group | 'all'>('all');
   const query = q.trim().toLowerCase();
@@ -61,6 +65,14 @@ export function Services() {
       <div className="ph">
         <h1>{t('svc.title')}</h1>
       </div>
+      <a className="card prof-card" href="#/me">
+        <ProfileAvatar profile={profile} label={me} size={52} />
+        <span className="main">
+          <b>{me}</b>
+          <small>{t('svc.profileD')}</small>
+        </span>
+        <Icon name="i-chev" />
+      </a>
       <label className="search">
         <Icon name="i-search" />
         <input value={q} onChange={e => setQ(e.target.value)} placeholder={t('svc.search')} aria-label={t('svc.search')} />
