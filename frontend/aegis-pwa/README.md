@@ -46,9 +46,11 @@ Current backend policy:
 
 ## Look and feel
 
-Multi-colour and friendly: violet leads, with pink, teal, amber and blue accents, on a soft lavender background (deep navy in dark mode), with the Nunito font bundled so it works offline. Chart categories use a separate colour-blind-checked palette in a fixed order (`--cat-*` in `styles.css`). Contact avatars are drawn in code (`src/ui/art.tsx`), the voice orb is a canvas animation (`src/ui/Orb.tsx`) and confetti is in `src/ui/celebrate.ts`.
+Minimal and flat: white, black and one purple (`#5b4cf5`), with green/red only for money in and out, and the system font. No emojis: pots, the ledger and services use line icons. Bank cards are drawn in CSS (black, purple and white finishes with chip, contactless mark and wordmark, `src/ui/BankCard.tsx`). Charts use shades of the purple (`--cat-*` in `styles.css`).
 
-Demo mode (no backend) ships about three months of fictional activity relative to today (`src/core/mockdata.ts`), so the dashboard, calendar, budgets, pots and reminders have something to show. Live mode shows only what Banking Core returns.
+Tabs: **Home · Cards · Aegis · Analytics · Services**. Services is the hub for pots and saving plans (fixed, flexible, 52-week, 365-day), investments, the cash ledger, bills, receipt scanning and settings.
+
+Demo mode (no backend) ships about three months of fictional activity relative to today (`src/core/mockdata.ts`). Live mode shows only what Banking Core returns.
 
 - **Signed-in persona:** "Jackie Chen" (`PROFILE` in `src/core/people.ts`).
 - **Contacts:** the People grid uses the family accounts seeded in Banking Core (爸爸, 妈妈 and so on). Tapping a contact saves them as a recipient through the backend's exact account-number match.
@@ -161,6 +163,7 @@ server.mjs    static server + token-adding proxy + CORS allowlist for native app
 - **Incoming vs outgoing money**: Banking Core doesn't mark rows as debit or credit, so direction is inferred from the category (`src/core/format.ts`).
 - **Agent in English**: with `MODEL_PROVIDER=offline`, the agent's rule-based router only understands Chinese phrasing (e.g. 查询余额). Connect an LLM provider in `.env` for free-form English.
 - **Savings pots** are funded by Banking Core (`savings.contribute`: Yellow up to ¥1,000, Red above). Pot colour and emoji are stored on the device only, because the backend doesn't store them.
+- **Cash ledger** entries are stored on the device only: Banking Core has no endpoint for manual entries, so they are not part of budgets or analytics.
 - **Investment returns** aren't shown: Banking Core has no rates or prices, so the tracker shows invested amounts and allocation only.
 - **Voice**: the browser's speech recognition hears one language at a time. The 中/EN button next to the mic switches it, separately from the app's language.
 - **App store icons and splash screens**: still the Capacitor defaults. Generate them from `public/icons/icon.svg` with `@capacitor/assets`.

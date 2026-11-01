@@ -8,10 +8,10 @@ export interface OrbLevel {
 }
 
 const LAYERS = [
-  { color: [106, 77, 255], speed: 0.55, lobes: 3, phase: 0 },
-  { color: [255, 95, 162], speed: -0.8, lobes: 4, phase: 1.7 },
-  { color: [46, 196, 182], speed: 0.95, lobes: 5, phase: 3.1 },
-  { color: [61, 139, 255], speed: -0.45, lobes: 2, phase: 4.4 },
+  { color: [91, 76, 245], speed: 0.55, lobes: 3, phase: 0 },
+  { color: [143, 132, 248], speed: -0.8, lobes: 4, phase: 1.7 },
+  { color: [45, 39, 128], speed: 0.95, lobes: 5, phase: 3.1 },
+  { color: [201, 195, 252], speed: -0.45, lobes: 2, phase: 4.4 },
 ];
 
 export function VoiceOrb({ size, level, active }: { size: number; level?: OrbLevel; active: boolean }) {
@@ -41,8 +41,8 @@ export function VoiceOrb({ size, level, active }: { size: number; level?: OrbLev
       const base = size * (activeRef.current ? 0.3 : 0.32) * (1 + amp * 0.25);
       // soft glow
       const glow = ctx.createRadialGradient(c, c, base * 0.4, c, c, size * 0.5);
-      glow.addColorStop(0, `rgba(140, 110, 255, ${0.28 + amp * 0.4})`);
-      glow.addColorStop(1, 'rgba(140, 110, 255, 0)');
+      glow.addColorStop(0, `rgba(91, 76, 245, ${0.22 + amp * 0.4})`);
+      glow.addColorStop(1, 'rgba(91, 76, 245, 0)');
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, size, size);
       // Additive blending only on the dark voice screen; on light pages it would wash out to white.

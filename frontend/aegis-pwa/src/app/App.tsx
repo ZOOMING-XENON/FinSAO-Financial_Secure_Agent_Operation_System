@@ -13,13 +13,16 @@ import { Me } from '../screens/Me';
 import { NewPot, PotDetail } from '../screens/Pot';
 import { Activity } from '../screens/Activity';
 import { Track } from '../screens/Track';
+import { Cards } from '../screens/Cards';
+import { Services } from '../screens/Services';
+import { Ledger } from '../screens/Ledger';
 
 const TABS = [
   { id: 'home', icon: 'i-home', key: 'nav.home' },
-  { id: 'insights', icon: 'i-chart', key: 'nav.insights' },
+  { id: 'cards', icon: 'i-card', key: 'nav.cards' },
   { id: 'aegis', icon: 'i-shield', key: 'nav.aegis' },
-  { id: 'wealth', icon: 'i-wallet', key: 'nav.wealth' },
-  { id: 'me', icon: 'i-user', key: 'nav.me' },
+  { id: 'insights', icon: 'i-chart', key: 'nav.insights' },
+  { id: 'services', icon: 'i-wallet', key: 'nav.services' },
 ] as const;
 
 function Shell() {
@@ -51,6 +54,15 @@ function Shell() {
     case 'wealth':
       view = <Wealth />;
       break;
+    case 'cards':
+      view = <Cards />;
+      break;
+    case 'services':
+      view = <Services />;
+      break;
+    case 'ledger':
+      view = <Ledger />;
+      break;
     case 'aegis':
       view = <Aegis />;
       mainClass = 'chat';
@@ -68,7 +80,7 @@ function Shell() {
       view = <Track />;
       break;
     case 'pot':
-      if (arg === 'new') view = <NewPot />;
+      if (arg?.startsWith('new')) view = <NewPot key={arg} initialPlan={arg === 'new-week52' ? 'week52' : arg === 'new-day365' ? 'day365' : undefined} />;
       else {
         view = <PotDetail id={arg} key={arg} />;
         mainClass = 'full';
@@ -78,7 +90,7 @@ function Shell() {
       view = <Home />;
       mainClass = 'home';
   }
-  const parentTab: Record<string, string> = { pot: 'wealth', calendar: 'insights', trends: 'insights', track: 'insights', activity: 'home', pay: 'home' };
+  const parentTab: Record<string, string> = { pot: 'services', wealth: 'services', ledger: 'services', me: 'services', calendar: 'insights', trends: 'insights', track: 'services', activity: 'home', pay: 'home' };
   const activeTab = parentTab[route] ?? (TABS.some(x => x.id === route) ? route : 'home');
 
   return (

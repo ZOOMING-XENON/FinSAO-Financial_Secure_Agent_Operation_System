@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../core/api';
 import type { Subscription } from '../core/types';
-import { change, cashflow, currentMonth, monthKey, shiftMonth, SPEND_ORDER, summarize, underBudgetStreak, type Month } from '../core/insights';
+import { change, cashflow, currentMonth, monthKey, periodRange, rangeSummary, shiftMonth, SPEND_ORDER, summarize, underBudgetStreak, type Month, type Period } from '../core/insights';
 import { daysUntil, formatDate, monthLabel } from '../core/format';
 import { formatMoney, fromCents, toCents } from '../core/money';
 import { useApp, useLoad } from '../app/state';
@@ -20,6 +20,8 @@ export function Insights() {
   const nudges = useNudges(pic.data);
   const [month, setMonth] = useState<Month>(currentMonth());
   const [budgetOpen, setBudgetOpen] = useState(false);
+  const [period, setPeriod] = useState<Period>('month');
+  const [offset, setOffset] = useState(0);
   const now = currentMonth();
   const isCurrent = monthKey(month) === monthKey(now);
   const atLatest = monthKey(month) >= monthKey(now);
@@ -35,6 +37,15 @@ export function Insights() {
     );
   }
   const { tx, budgets, subs } = pic.data;
+  const rr = period === 'month' ? null : periodRange(period, offset);
+  const range = rr ? rangeSummary(tx, rr.from, rr.to, period === 'week' ? 'day' : 'month') : null;
+  const rangeDays = rr ? Math.round((Math.min(Date.now(), rr.to.getTime()) - rr.from.getTime()) / 86_400_000) || 1 : 1;
+  const rangeTitle = rr
+    ? period === 'year'
+      ? String(rr.from.getFullYear())
+      : `${rr.from.toLocaleDateString(locale, { month: 'short', day: 'numeric' })} – ${new Date(rr.to.getTime() - 86_400_000).toLocaleDateString(locale, { month: 'short', day: 'numeric' })}`
+    : '';
+  const rangeParts = range ? SPEND_ORDER.filter(k => (range.byCategory[k] ?? 0n) > 0n).map(k => ({ key: k, cents: range.byCategory[k], label: t(`cat.${k}`) })) : [];
   const s = summarize(tx, month);
   const prev = summarize(tx, shiftMonth(month, -1));
   const todayIdx = isCurrent ? new Date().getDate() - 1 : s.cumulative.length - 1;
@@ -73,16 +84,99 @@ export function Insights() {
         </a>
       </div>
 
+      <div className="seg" role="tablist" style={{ marginBottom: 12 }}>
+        {(['week', 'month', 'year'] as const).map(p => (
+          <button
+            key={p}
+            role="tab"
+            aria-selected={period === p}
+            className={period === p ? 'on' : ''}
+            onClick={() => {
+              setPeriod(p);
+              setOffset(0);
+              setMonth(currentMonth());
+            }}
+          >
+            {t(`ins.p.${p}` as 'ins.p.week')}
+          </button>
+        ))}
+      </div>
       <div className="cal-head">
-        <button className="icon-btn" aria-label={t('trends.prev')} onClick={() => setMonth(shiftMonth(month, -1))}>
+        <button className="icon-btn" aria-label={t('trends.prev')} onClick={() => (period === 'month' ? setMonth(shiftMonth(month, -1)) : setOffset(o => o - 1))}>
           <Icon name="i-left" />
         </button>
-        <h2 className="center">{monthLabel(month.year, month.month, locale)}</h2>
-        <button className="icon-btn" aria-label={t('trends.next')} disabled={atLatest} style={atLatest ? { opacity: 0.35 } : undefined} onClick={() => setMonth(shiftMonth(month, 1))}>
+        <h2 className="center">{period === 'month' ? monthLabel(month.year, month.month, locale) : rangeTitle}</h2>
+        <button
+          className="icon-btn"
+          aria-label={t('trends.next')}
+          disabled={period === 'month' ? atLatest : offset >= 0}
+          style={(period === 'month' ? atLatest : offset >= 0) ? { opacity: 0.35 } : undefined}
+          onClick={() => (period === 'month' ? setMonth(shiftMonth(month, 1)) : setOffset(o => o + 1))}
+        >
           <Icon name="i-chev" />
         </button>
       </div>
 
+      {period !== 'month' && range && (
+        <>
+          <section className="card summary">
+            <span className="hero-t">{t('ins.spentPeriod')}</span>
+            <div className="sum-row">
+              <Amount value={fromCents(range.spent)} className="big" />
+            </div>
+            <div className="stats">
+              <div className="stat">
+                <small>{t('ins.income')}</small>
+                <b>{m$(range.income)}</b>
+              </div>
+              <div className="stat">
+                <small>{t('ins.net')}</small>
+                <b>{(range.income >= range.spent ? '+' : '-') + m$(range.income >= range.spent ? range.income - range.spent : range.spent - range.income)}</b>
+              </div>
+              <div className="stat">
+                <small>{t('ins.dailyAvg')}</small>
+                <b>{m$(range.spent / BigInt(Math.max(1, rangeDays)))}</b>
+              </div>
+              <div className="stat">
+                <small>{t('ins.biggestCat')}</small>
+                <b>{rangeParts[0] ? rangeParts.slice().sort((a, b) => (b.cents > a.cents ? 1 : -1))[0].label : '—'}</b>
+              </div>
+            </div>
+          </section>
+          <section className="card">
+            <div className="card-h">
+              <h3>{t(period === 'week' ? 'ins.byDay' : 'ins.byMonth')}</h3>
+            </div>
+            <CashflowBars data={range.buckets.map(x => ({ label: period === 'week' ? x.start.toLocaleDateString(locale, { weekday: 'narrow' }) + x.start.getDate() : x.start.toLocaleDateString(locale, { month: 'narrow' }), income: x.income, spent: x.spent }))} labels={{ income: t('ins.income'), spent: t('ins.spentShort') }} />
+          </section>
+          <section className="card">
+            <div className="card-h">
+              <h3>{t('trends.byCategory')}</h3>
+            </div>
+            {rangeParts.length === 0 ? (
+              <div className="empty">{t('trends.noSpend')}</div>
+            ) : (
+              <div className="cat-split">
+                <Donut parts={rangeParts} total={range.spent} centerLabel={t('ins.spentShort')} />
+                <ul className="cat-legend">
+                  {rangeParts.map(p => (
+                    <li key={p.key}>
+                      <i className="sw" style={{ background: `var(--cat-${p.key})` }} />
+                      <span className="main">
+                        <b>{p.label}</b>
+                        <span className="mut small">{range.spent > 0n ? Number((p.cents * 100n) / range.spent) : 0}%</span>
+                      </span>
+                      <span className="v">{m$(p.cents)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+      {period === 'month' && (
+        <>
       <section className="card summary">
         <span className="hero-t">{t('ins.spent')}</span>
         <div className="sum-row">
@@ -166,7 +260,7 @@ export function Insights() {
       <section className="card">
         <div className="card-h">
           <h3>{t('ins.pace')}</h3>
-          {streak >= 2 && <span className="badge streak">🔥 {t('ins.streak', { n: streak })}</span>}
+          {streak >= 2 && <span className="badge streak">{t('ins.streak', { n: streak })}</span>}
         </div>
         {s.spent === 0n ? (
           <div className="empty">{t('trends.noSpend')}</div>
@@ -273,6 +367,9 @@ export function Insights() {
             </div>
           ))}
         </section>
+      )}
+
+        </>
       )}
 
       <BudgetSheet open={budgetOpen} onClose={() => setBudgetOpen(false)} month={monthKey(month)} onSaved={() => pic.reload()} />

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { api, uid } from '../core/api';
 import type { RiskTier, SavingsPot } from '../core/types';
 import { potPlan } from '../core/insights';
-import { potLook, themeBg } from '../core/potstyle';
+import { potLook, themeBg, themeFg } from '../core/potstyle';
 import { formatMoney, fromCents, isValidAmount, normalizeAmount, toCents } from '../core/money';
 import { useApp, useLoad } from '../app/state';
 import { useShield } from '../ui/Shield';
@@ -68,10 +68,12 @@ export function PotCard({ pot }: { pot: SavingsPot }) {
   const plan = potPlan(pot);
   const status = plan.reached ? 'done' : plan.gap >= 0n ? 'ahead' : 'behind';
   return (
-    <a className="potc" href={`#/pot/${pot.id}`} style={{ background: themeBg(look.theme) }}>
+    <a className="potc" href={`#/pot/${pot.id}`} style={{ background: themeBg(look.theme), color: themeFg(look.theme) }}>
       <div className="potc-top">
-        <Ring pct={plan.pct} size={58} stroke={5}>
-          <span className="potc-emoji">{look.emoji}</span>
+        <Ring pct={plan.pct} size={52} stroke={4}>
+          <span className="potc-emoji">
+            <Icon name={look.icon} />
+          </span>
         </Ring>
         <span className={'potc-status ' + status}>{t(`pot.st.${status}` as 'pot.st.done')}</span>
       </div>
