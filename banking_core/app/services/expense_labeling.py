@@ -7,13 +7,8 @@ from uuid import UUID
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from banking_core.app.domain.enums import TransactionStatus
-from banking_core.app.persistence.models import (
-    AccountModel,
-    ExpenseLabelAttemptModel,
-    LedgerEntryModel,
-    TransactionModel,
-)
+from banking_core.app.domain.enums import TransactionKind, TransactionStatus
+from banking_core.app.persistence.models import ExpenseLabelAttemptModel, TransactionModel
 from banking_core.app.services.errors import ConflictError, ForbiddenError, NotFoundError
 from shared.expense_taxonomy import normalize_category
 
@@ -48,8 +43,6 @@ class ExpenseLabelingService:
         transactions = list(
             self.session.scalars(
                 select(TransactionModel)
-                .join(LedgerEntryModel, LedgerEntryModel.transaction_id == TransactionModel.id)
-                .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
                 .outerjoin(
                     ExpenseLabelAttemptModel,
                     and_(
@@ -58,9 +51,10 @@ class ExpenseLabelingService:
                     ),
                 )
                 .where(
-                    AccountModel.user_id == user_id,
-                    LedgerEntryModel.credit > 0,
+                    TransactionModel.user_id == user_id,
+                    TransactionModel.kind == TransactionKind.EXPENSE,
                     TransactionModel.status == TransactionStatus.COMPLETED,
+                    TransactionModel.deleted_at.is_(None),
                     or_(
                         TransactionModel.category_source.is_(None),
                         and_(
@@ -95,7 +89,16 @@ class ExpenseLabelingService:
                 .where(TransactionModel.id == candidate.id)
                 .with_for_update()
             )
-            if transaction is None or transaction.category_source is not None:
+            if transaction is None or transaction.deleted_at is not None:
+                continue
+            if transaction.category_source == "USER":
+                continue
+            if transaction.category_source == "RULE" and transaction.category not in {
+                None,
+                "UNKNOWN",
+            }:
+                continue
+            if transaction.category_source not in {None, "RULE"}:
                 continue
             attempt = self.session.scalar(
                 select(ExpenseLabelAttemptModel)
@@ -135,10 +138,12 @@ class ExpenseLabelingService:
         self, transaction_id: UUID, user_id: UUID, attempt: LabelAttempt
     ) -> ExpenseLabelAttemptModel:
         transaction = self.session.scalar(
-            select(TransactionModel)
-            .join(LedgerEntryModel, LedgerEntryModel.transaction_id == TransactionModel.id)
-            .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
-            .where(TransactionModel.id == transaction_id, AccountModel.user_id == user_id)
+            select(TransactionModel).where(
+                TransactionModel.id == transaction_id,
+                TransactionModel.user_id == user_id,
+                TransactionModel.kind == TransactionKind.EXPENSE,
+                TransactionModel.deleted_at.is_(None),
+            )
         )
         if transaction is None:
             raise NotFoundError("transaction not found")
@@ -185,9 +190,12 @@ class ExpenseLabelingService:
             raise ForbiddenError("derived labels must be JEV or RULE")
         transaction = self.session.scalar(
             select(TransactionModel)
-            .join(LedgerEntryModel, LedgerEntryModel.transaction_id == TransactionModel.id)
-            .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
-            .where(TransactionModel.id == transaction_id, AccountModel.user_id == user_id)
+            .where(
+                TransactionModel.id == transaction_id,
+                TransactionModel.user_id == user_id,
+                TransactionModel.kind == TransactionKind.EXPENSE,
+                TransactionModel.deleted_at.is_(None),
+            )
             .with_for_update()
         )
         if transaction is None:

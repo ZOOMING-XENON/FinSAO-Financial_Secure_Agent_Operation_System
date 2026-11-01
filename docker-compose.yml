@@ -18,6 +18,9 @@ services:
   api:
     build: .
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://banking:banking@db:5432/banking
+      AGENT_CHECKPOINT_DATABASE_URL: postgresql://banking:banking@db:5432/banking
     command: >-
       sh -c "python -m alembic upgrade head &&
       python -m scripts.seed_demo_data &&

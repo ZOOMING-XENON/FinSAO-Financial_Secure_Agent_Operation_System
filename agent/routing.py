@@ -13,6 +13,9 @@ class Intent(StrEnum):
     LIST_ACCOUNTS = "LIST_ACCOUNTS"
     GET_BALANCE = "GET_BALANCE"
     GET_TRANSACTIONS = "GET_TRANSACTIONS"
+    RECORD_EXPENSE = "RECORD_EXPENSE"
+    UPDATE_EXPENSE = "UPDATE_EXPENSE"
+    DELETE_EXPENSE = "DELETE_EXPENSE"
     TRACK_EXPENSES = "TRACK_EXPENSES"
     SUMMARIZE_EXPENSES = "SUMMARIZE_EXPENSES"
     CORRECT_EXPENSE_CATEGORY = "CORRECT_EXPENSE_CATEGORY"
@@ -50,6 +53,9 @@ CHAT_UNAVAILABLE_INTENTS: frozenset[Intent] = frozenset({Intent.CORRECT_EXPENSE_
 REQUIRED_SLOTS_BY_INTENT: dict[Intent, tuple[str, ...]] = {
     Intent.GET_BALANCE: ("account_id",),
     Intent.GET_TRANSACTIONS: ("account_id",),
+    Intent.RECORD_EXPENSE: ("amount", "currency", "merchant"),
+    Intent.UPDATE_EXPENSE: ("expense_id",),
+    Intent.DELETE_EXPENSE: ("expense_id",),
     Intent.TRACK_EXPENSES: (),
     Intent.SUMMARIZE_EXPENSES: (),
     Intent.CORRECT_EXPENSE_CATEGORY: (),
@@ -136,9 +142,59 @@ class RuleRouter:
                 confidence=1.0,
                 reason="untrusted instruction marker requires safe fallback",
             )
+        if (
+            ("expense" in normalized or "expenses" in normalized)
+            and any(
+                word in normalized
+                for word in ("delete", "remove", "删除", "删掉", "移除")
+            )
+        ):
+            return self._result(
+                Intent.DELETE_EXPENSE,
+                route=Route.PLANNER,
+                complexity=2,
+                reason="expense deletion requires verified planning",
+                required_slots=["expense_id"],
+            )
+        if (
+            ("expense" in normalized or "expenses" in normalized)
+            and any(
+                word in normalized
+                for word in ("change", "update", "edit", "modify", "修改", "改成", "更正")
+            )
+        ):
+            return self._result(
+                Intent.UPDATE_EXPENSE,
+                route=Route.PLANNER,
+                complexity=2,
+                reason="expense update requires verified planning",
+                required_slots=["expense_id"],
+            )
+        if re.search(
+            r"(?:ispent|wesent|spent|ipaid|wepaid|paid|ibought|webought|bought|"
+            r"charged|cost|花了|我花了|消费|支付|买了)",
+            normalized,
+        ) and re.search(r"\d", normalized):
+            return self._result(
+                Intent.RECORD_EXPENSE,
+                route=Route.PLANNER,
+                complexity=2,
+                confidence=0.92,
+                reason="completed spending requires tracked expense capture",
+                required_slots=["amount", "currency", "merchant"],
+            )
+        if re.search(r"(?:was|cost|for)\d", normalized):
+            return self._result(
+                Intent.RECORD_EXPENSE,
+                route=Route.PLANNER,
+                complexity=2,
+                confidence=0.82,
+                reason="amount-led expense statement",
+                required_slots=["amount", "currency", "merchant"],
+            )
         if any(
             word in normalized
-            for word in ("expense", "expenses", "spending", "spent", "消费", "支出", "花费")
+            for word in ("expense", "expenses", "spending", "spent", "支出", "花费", "消费")
         ):
             if any(
                 word in normalized

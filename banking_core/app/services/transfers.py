@@ -8,7 +8,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from banking_core.app.domain.enums import AccountStatus, Currency, TransactionStatus, TransferStatus
+from banking_core.app.domain.enums import (
+    AccountStatus,
+    Currency,
+    TransactionKind,
+    TransactionOrigin,
+    TransactionStatus,
+    TransferStatus,
+)
 from banking_core.app.domain.money import quantize_money
 from banking_core.app.persistence.models import (
     AccountModel,
@@ -199,8 +206,12 @@ class TransferService:
         destination.balance += draft.amount
         transaction = TransactionModel(
             id=uuid4(),
+            user_id=user_id,
+            account_id=source.id,
             reference=f"TRF-{draft.id}",
             status=TransactionStatus.COMPLETED,
+            kind=TransactionKind.TRANSFER,
+            origin=TransactionOrigin.BANK,
             amount=draft.amount,
             currency=draft.currency,
             description="Account transfer",

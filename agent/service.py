@@ -22,7 +22,7 @@ from agent.contracts import (
     TaskPlan,
     TrustedAgentContext,
 )
-from agent.jev_http import JevUnavailable
+from agent.jev_http import JevAuthError, JevUnavailable
 from agent.localization import (
     BUDGET_CATEGORIES,
     FIELD_LABELS,
@@ -51,7 +51,9 @@ class Router(Protocol):
 
 
 class PlanReviewer(Protocol):
-    async def review_plan(self, text: str, plan: TaskPlan) -> float: ...
+    async def review_plan(
+        self, text: str, plan: TaskPlan, intent: Intent | None = None
+    ) -> float: ...
 
 
 class Planner(Protocol):
@@ -190,25 +192,69 @@ class AgentService:
                 message=validation_message,
                 error=AgentError(code=exc.code, message=str(exc)),
             )
-        if self._plan_reviewer is not None:
+        reviewer = self._plan_reviewer
+        should_review = (
+            reviewer is not None
+            and intent.reason.startswith(("llm:", "jev:"))
+            and intent.intent not in {
+                Intent.RECORD_EXPENSE,
+                Intent.UPDATE_EXPENSE,
+                Intent.DELETE_EXPENSE,
+            }
+            and any(
+                step.tool_call is not None
+                and step.tool_call.tool_name
+                in {
+                    "create_transfer_draft",
+                    "commit_transfer",
+                    "create_wealth_subscription_draft",
+                    "commit_wealth_subscription",
+                    "create_wealth_redemption_draft",
+                    "commit_wealth_redemption",
+                    "cancel_subscription",
+                    "update_card_limit",
+                    "freeze_card",
+                    "unfreeze_card",
+                    "report_card_lost",
+                    "contribute_savings_pot",
+                }
+                for step in plan.steps
+            )
+        )
+        if should_review and reviewer is not None:
             try:
-                review = await self._plan_reviewer.review_plan(request.message, plan)
+                review = await reviewer.review_plan(
+                    request.message, plan, intent.intent
+                )
             except (JevUnavailable, TimeoutError) as exc:
                 logger.warning("plan review unavailable: %s", type(exc).__name__)
+                auth_failed = isinstance(exc, JevAuthError)
                 return AgentResponse(
                     request_id=request.request_id,
                     session_id=request.session_id,
                     task_id=context.task_id,
                     status=AgentResponseStatus.NEEDS_CLARIFICATION,
                     message=(
-                        "Plan review is temporarily unavailable; no action was executed."
+                        "Plan review is not configured correctly; no action was executed."
+                        if auth_failed and is_english(request.locale)
+                        else "计划审查未正确配置，未执行任何操作。"
+                        if auth_failed
+                        else "Plan review is temporarily unavailable; no action was executed."
                         if is_english(request.locale)
-                        else "计划复核暂不可用，未执行任何操作。"
+                        else "计划审查暂时不可用，未执行任何操作。"
                     ),
                     plan=localize_plan(plan, request.locale),
                     error=AgentError(
-                        code="PLAN_REVIEW_UNAVAILABLE",
-                        message="plan review provider unavailable",
+                        code=(
+                            "JEV_AUTH_INVALID"
+                            if auth_failed
+                            else "PLAN_REVIEW_UNAVAILABLE"
+                        ),
+                        message=(
+                            "Jev authentication failed"
+                            if auth_failed
+                            else "plan review provider unavailable"
+                        ),
                     ),
                 )
             if review < self._plan_review_threshold:
@@ -280,6 +326,7 @@ class AgentService:
                     status=response_status,
                     plan=public_plan,
                     data=data,
+                    locale=request.locale,
                 )
             ),
             plan=public_plan,
@@ -438,12 +485,31 @@ class AgentService:
         inferred_labels = [field.label for field in fields if field.inferred]
         missing_labels = [labels.get(name, name.replace("_", " ")) for name in slots.missing]
         if intent.intent == Intent.TRANSFER:
-            message = "请选择付款账户，并输入或选择以前保存的收款人；系统不会要求你复制内部 UUID。"
+            message = (
+                "Choose a source account and a saved recipient. The form never asks "
+                "you to copy an internal UUID."
+                if is_english(request.locale)
+                else "请选择付款账户，并输入或选择以前保存的收款人；系统不会要求你复制内部 UUID。"
+            )
         elif inferred_labels:
-            suffix = f"，并补充：{'、'.join(missing_labels)}" if missing_labels else ""
-            message = f"我根据上下文推断了{'、'.join(inferred_labels)}{suffix}。请检查表单后确认。"
+            suffix = (
+                f" and add: {', '.join(missing_labels)}" if missing_labels else ""
+            )
+            zh_suffix = (
+                f"，并补充：{'、'.join(missing_labels)}" if missing_labels else ""
+            )
+            message = (
+                f"I inferred {', '.join(inferred_labels)}{suffix}. Please review and confirm."
+                if is_english(request.locale)
+                else f"我根据上下文推断了{'、'.join(inferred_labels)}{zh_suffix}。"
+                "请检查表单后确认。"
+            )
         else:
-            message = f"为了继续，请补充：{'、'.join(missing_labels)}。"
+            message = (
+                f"To continue, provide: {', '.join(missing_labels)}."
+                if is_english(request.locale)
+                else f"为了继续，请补充：{'、'.join(missing_labels)}。"
+            )
         clarification = ClarificationPayload(
             kind="CONFIRM_INFERRED" if inferred_labels else "MISSING_FIELDS",
             intent=intent.intent.value,

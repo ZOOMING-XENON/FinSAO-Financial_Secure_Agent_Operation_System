@@ -36,6 +36,9 @@ FIELD_LABELS = {
         "destination_account_id": "收款人（可输入姓名自动匹配）",
         "amount": "金额",
         "currency": "币种",
+        "merchant": "商户",
+        "occurred_at": "消费时间",
+        "expense_id": "支出记录 ID",
         "name": "储蓄目标名称",
         "target_amount": "目标金额",
         "target_date": "目标日期",
@@ -51,6 +54,9 @@ FIELD_LABELS = {
         "destination_account_id": "Beneficiary",
         "amount": "Amount",
         "currency": "Currency",
+        "merchant": "Merchant",
+        "occurred_at": "Expense time",
+        "expense_id": "Expense ID",
         "name": "Savings goal name",
         "target_amount": "Target amount",
         "target_date": "Target date",
@@ -69,5 +75,61 @@ def contains_cjk(value: str) -> bool:
     return re.search(r"[\u3400-\u9fff]", value) is not None
 
 
+_ENGLISH_PURPOSE = {
+    "record_expense": "Record an expense",
+    "update_expense": "Update an expense",
+    "delete_expense": "Delete an expense",
+    "get_accounts": "List the user's accounts",
+    "get_balance": "Read an account balance",
+    "get_transactions": "Read transaction history",
+    "get_expenses": "List expenses",
+    "summarize_expenses": "Summarize expenses",
+    "create_transfer_draft": "Prepare a transfer",
+    "commit_transfer": "Commit an approved transfer",
+    "get_transfer_status": "Check transfer status",
+    "resolve_beneficiary": "Resolve a recipient",
+    "list_beneficiaries": "List saved recipients",
+    "list_recent_recipients": "List recent recipients",
+    "analyze_spending": "Analyze spending",
+    "list_budgets": "List budgets",
+    "get_budget_status": "Read budget usage",
+    "create_budget": "Create a budget",
+    "update_budget": "Update a budget",
+    "list_subscriptions": "List subscriptions",
+    "detect_recurring_payments": "Detect recurring payments",
+    "cancel_subscription": "Cancel a subscription",
+    "list_cards": "List cards",
+    "get_card_status": "Read card status",
+    "update_card_limit": "Update a card limit",
+    "freeze_card": "Freeze a card",
+    "unfreeze_card": "Unfreeze a card",
+    "report_card_lost": "Report a card lost",
+    "list_wealth_products": "List wealth products",
+    "compare_wealth_products": "Compare wealth products",
+    "get_wealth_recommendations": "Get wealth recommendations",
+    "assess_risk_profile": "Assess risk profile",
+    "get_holdings": "List holdings",
+    "list_savings_pots": "List savings goals",
+    "create_savings_pot": "Create a savings goal",
+    "contribute_savings_pot": "Contribute to a savings goal",
+}
+
+
 def localize_plan(plan: TaskPlan, locale: str) -> TaskPlan:
-    return plan
+    if not is_english(locale):
+        return plan
+    steps = []
+    for step in plan.steps:
+        tool = step.tool_call.tool_name if step.tool_call is not None else None
+        purpose = _ENGLISH_PURPOSE.get(tool or "", "Execute the requested action")
+        steps.append(step.model_copy(update={"purpose": purpose}))
+    first_tool = next(
+        (
+            step.tool_call.tool_name
+            for step in plan.steps
+            if step.tool_call is not None
+        ),
+        None,
+    )
+    goal = _ENGLISH_PURPOSE.get(first_tool or "", "Complete the request")
+    return plan.model_copy(update={"goal": goal, "steps": steps})

@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
-    database_url: str = Field(default="postgresql+psycopg://banking:banking@localhost:5432/banking")
+    database_url: str = Field(default="postgresql+psycopg://banking:banking@127.0.0.1:5432/banking")
     sql_echo: bool = False
     development_user_id: UUID | None = None
     mock_mfa_code: SecretStr | None = None

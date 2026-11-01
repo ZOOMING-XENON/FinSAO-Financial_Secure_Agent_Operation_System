@@ -35,6 +35,19 @@ class SafeResponseGenerator:
             if english:
                 return "Banking Core did not confirm that the operation succeeded."
             return "Banking Core 未确认操作成功。"
+        if tool_name in {"record_expense", "update_expense"} and isinstance(data, dict):
+            merchant = str(data.get("merchant") or data.get("description") or "expense")
+            amount = str(data.get("amount", ""))
+            currency = str(data.get("currency", ""))
+            verb = "Recorded" if tool_name == "record_expense" else "Updated"
+            if english:
+                return (
+                    f"{verb} {merchant} for {amount} {currency}. "
+                    "You can undo or change the category."
+                )
+            return f"已记录 {merchant}，金额 {amount} {currency}。可撤销或修改分类。"
+        if tool_name == "delete_expense" and isinstance(data, dict) and data.get("deleted"):
+            return "Expense deleted." if english else "支出记录已删除。"
         english_counts = {
             "get_accounts": ("account", "accounts"),
             "list_cards": ("card", "cards"),

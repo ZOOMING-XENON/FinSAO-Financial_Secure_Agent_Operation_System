@@ -11,6 +11,7 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from agent.expense_capture import parse_expense
 from agent.routing import Intent, IntentResult
 
 
@@ -105,6 +106,43 @@ class SlotTracker:
             facts["account_id"] = SlotFact(
                 "account_id", str(UUID(ids[0])), FactSource.USER_EXPLICIT
             )
+        elif intent.intent == Intent.RECORD_EXPENSE:
+            capture = parse_expense(text, now=datetime.now(ZoneInfo("Asia/Shanghai")))
+            if capture.amount is not None:
+                facts["amount"] = SlotFact("amount", capture.amount, FactSource.USER_EXPLICIT)
+            if capture.currency is not None:
+                facts["currency"] = SlotFact(
+                    "currency", capture.currency, FactSource.USER_EXPLICIT
+                )
+            if capture.merchant is not None:
+                facts["merchant"] = SlotFact(
+                    "merchant", capture.merchant, FactSource.USER_EXPLICIT
+                )
+            if capture.category is not None:
+                facts["category"] = SlotFact(
+                    "category", capture.category, FactSource.USER_EXPLICIT
+                )
+            facts["occurred_at"] = SlotFact(
+                "occurred_at", capture.occurred_at.isoformat(), FactSource.USER_EXPLICIT
+            )
+            facts["origin"] = SlotFact("origin", capture.origin, FactSource.SYSTEM_CONSTANT)
+            if ids:
+                facts["account_id"] = SlotFact(
+                    "account_id", str(UUID(ids[0])), FactSource.USER_EXPLICIT
+                )
+        elif intent.intent in {Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}:
+            if ids:
+                facts["expense_id"] = SlotFact(
+                    "expense_id", str(UUID(ids[0])), FactSource.USER_EXPLICIT
+                )
+            if intent.intent == Intent.UPDATE_EXPENSE:
+                capture = parse_expense(text, now=datetime.now(ZoneInfo("Asia/Shanghai")))
+                if amount:
+                    facts["amount"] = SlotFact("amount", amount, FactSource.USER_EXPLICIT)
+                if capture.category is not None:
+                    facts["category"] = SlotFact(
+                        "category", capture.category, FactSource.USER_EXPLICIT
+                    )
         elif intent.intent in {Intent.TRACK_EXPENSES, Intent.SUMMARIZE_EXPENSES}:
             lowered = text.lower()
             now = datetime.now(ZoneInfo("Asia/Shanghai"))

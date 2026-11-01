@@ -133,6 +133,9 @@ def test_expense_tool_mutation_metadata() -> None:
         "get_expenses": False,
         "summarize_expenses": False,
         "categorize_transaction": True,
+        "record_expense": True,
+        "update_expense": True,
+        "delete_expense": True,
         "create_transfer_draft": True,
         "compare_wealth_products": False,
         "assess_risk_profile": True,
@@ -149,6 +152,9 @@ def test_expense_core_routes_are_registered() -> None:
 
     paths = app.openapi()["paths"]
     assert "/transactions" in paths
+    assert "/activity" in paths
+    assert "/expenses" in paths
+    assert "/expenses/{expense_id}" in paths
     assert "/analytics/expenses/summary" in paths
     assert "/recipients/recent" in paths
     assert "/internal/expense-labeling/transactions/{transaction_id}/label" in paths
@@ -202,3 +208,43 @@ def test_merchant_normalization_and_like_escaping() -> None:
 
     assert normalize_merchant("  Café   SHOP  ") == "café shop"
     assert escape_like("50%_off") == "50\\%\\_off"
+
+
+def test_record_expense_parser_is_deterministic() -> None:
+    routed = ExpenseRouter(RuleRouter(), enabled=True).route("I spent 5 dollars on coke")
+    slots = SlotTracker().extract("I spent 5 dollars on coke", routed)
+    assert routed.intent == Intent.RECORD_EXPENSE
+    assert slots.facts["amount"].value == "5.00"
+    assert slots.facts["currency"].value == "USD"
+    assert slots.facts["merchant"].value == "coke"
+    assert slots.facts["category"].value == "GROCERIES"
+    assert slots.missing == []
+
+
+@pytest.mark.asyncio
+async def test_record_expense_plan_calls_record_expense() -> None:
+    agent, gateway = service()
+    response = await agent.handle(
+        AgentRequest(session_id=uuid4(), message="I spent 5 dollars on coke"),
+        context(),
+    )
+    assert response.status == AgentResponseStatus.COMPLETED
+    assert gateway.calls[0][0] == "record_expense"
+    arguments = gateway.calls[0][1]
+    assert arguments["amount"] == "5.00"
+    assert arguments["currency"] == "USD"
+    assert arguments["merchant"] == "coke"
+    assert arguments["origin"] == "CASH"
+    assert arguments["idempotency_key"]
+
+
+def test_record_expense_beats_generic_spent_listing() -> None:
+    routed = ExpenseRouter(RuleRouter(), enabled=True).route("I spent 20 on lunch")
+    assert routed.intent == Intent.RECORD_EXPENSE
+
+
+def test_expense_delete_and_update_intents() -> None:
+    delete = ExpenseRouter(RuleRouter(), enabled=True).route("delete the taxi expense")
+    update = ExpenseRouter(RuleRouter(), enabled=True).route("change the coke expense to 6")
+    assert delete.intent == Intent.DELETE_EXPENSE
+    assert update.intent == Intent.UPDATE_EXPENSE

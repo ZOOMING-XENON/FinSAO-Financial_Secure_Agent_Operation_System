@@ -7,7 +7,12 @@ from pydantic import BaseModel, Field
 
 from agent_tools.client import BankingClientError, BankingHttpClient
 from agent_tools.contracts import BaseBankingTool, ExecutionContext
-from banking_core.app.domain.enums import Currency
+from banking_core.app.domain.enums import (
+    Currency,
+    TransactionDirection,
+    TransactionKind,
+    TransactionOrigin,
+)
 from banking_core.app.domain.money import MoneyDecimal
 
 
@@ -51,10 +56,16 @@ class TransactionOutput(BaseModel):
     id: UUID
     reference: str
     status: str
+    kind: TransactionKind = TransactionKind.EXPENSE
+    origin: TransactionOrigin = TransactionOrigin.BANK
+    direction: TransactionDirection | None = None
+    account_id: UUID | None = None
     amount: Decimal
     currency: Currency
     description: str
+    merchant: str | None = None
     category: str | None
+    category_source: str | None = None
     posted_at: datetime | None
 
 
@@ -232,10 +243,8 @@ class GetExpensesTool(BaseBankingTool[ExpenseQueryInput, ExpenseListOutput]):
         self, input_data: ExpenseQueryInput, context: ExecutionContext
     ) -> ExpenseListOutput:
         values = _params(input_data.model_dump(mode="json"))
-        account_id = values.pop("account_id", None)
-        path = f"/accounts/{account_id}/transactions" if account_id else "/transactions"
         return await self.client.request(
-            "GET", path, context, ExpenseListOutput, params=values
+            "GET", "/transactions", context, ExpenseListOutput, params=values
         )
 
 
