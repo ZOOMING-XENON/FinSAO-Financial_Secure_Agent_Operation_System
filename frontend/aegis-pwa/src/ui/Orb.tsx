@@ -7,6 +7,11 @@ export interface OrbLevel {
   current: number; // 0..1, written by the voice session
 }
 
+export interface MicLevelSession {
+  stop: () => void;
+  error?: 'denied' | 'unavailable';
+}
+
 const LAYERS = [
   { color: [106, 77, 255], speed: 0.55, lobes: 3, phase: 0 },
   { color: [255, 95, 162], speed: -0.8, lobes: 4, phase: 1.7 },
@@ -92,11 +97,17 @@ export function VoiceOrb({ size, level, active }: { size: number; level?: OrbLev
   return <canvas ref={ref} className="voice-orb" style={{ width: size, height: size }} aria-hidden="true" />;
 }
 
-/** Opens the microphone only to measure loudness for the orb. Returns a stop function. */
-export async function startMicLevel(level: OrbLevel): Promise<() => void> {
+/** Opens the microphone only to measure loudness for the orb. */
+export async function startMicLevel(level: OrbLevel): Promise<MicLevelSession> {
+  let stream: MediaStream | null = null;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (!navigator.mediaDevices?.getUserMedia) return { stop: () => undefined, error: 'unavailable' };
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AC) {
+      stream.getTracks().forEach(tr => tr.stop());
+      return { stop: () => undefined, error: 'unavailable' };
+    }
     const ac = new AC();
     const src = ac.createMediaStreamSource(stream);
     const analyser = ac.createAnalyser();
@@ -112,15 +123,21 @@ export async function startMicLevel(level: OrbLevel): Promise<() => void> {
       raf = requestAnimationFrame(tick);
     };
     tick();
-    return () => {
-      cancelAnimationFrame(raf);
-      stream.getTracks().forEach(tr => tr.stop());
-      ac.close().catch(() => undefined);
-      level.current = 0;
+    return {
+      stop: () => {
+        cancelAnimationFrame(raf);
+        stream?.getTracks().forEach(tr => tr.stop());
+        ac.close().catch(() => undefined);
+        level.current = 0;
+      },
     };
-  } catch {
-    return () => {
-      level.current = 0;
+  } catch (error) {
+    stream?.getTracks().forEach(tr => tr.stop());
+    level.current = 0;
+    const name = error instanceof DOMException ? error.name : '';
+    return {
+      stop: () => undefined,
+      error: name === 'NotAllowedError' || name === 'SecurityError' ? 'denied' : 'unavailable',
     };
   }
 }
