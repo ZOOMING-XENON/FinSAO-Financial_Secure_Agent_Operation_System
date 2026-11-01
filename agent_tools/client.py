@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol, TypeVar
+from typing import Protocol, TypeVar, cast
 
 import httpx
 from pydantic import BaseModel
@@ -84,4 +84,6 @@ class BankingHttpClient:
                 str(body.get("message", body.get("detail", "banking request failed"))),
                 response.status_code,
             )
+        if response.status_code == 204:
+            return cast(ResponseT, None)
         return response_model.model_validate(response.json())

@@ -12,6 +12,9 @@ class CapabilityBroker:
         Intent.LIST_ACCOUNTS: {"accounts.list"},
         Intent.GET_BALANCE: {"accounts.list", "balance.query"},
         Intent.GET_TRANSACTIONS: {"accounts.list", "transactions.query"},
+        Intent.TRACK_EXPENSES: {"expenses.query"},
+        Intent.SUMMARIZE_EXPENSES: {"expenses.summary"},
+        Intent.CORRECT_EXPENSE_CATEGORY: set(),
         Intent.TRANSFER: {
             "accounts.list",
             "balance.query",

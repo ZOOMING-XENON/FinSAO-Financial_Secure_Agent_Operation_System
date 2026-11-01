@@ -118,7 +118,34 @@ class TransactionModel(TimestampMixin, Base):
     currency: Mapped[Currency] = mapped_column(enum_column(Currency, "currency"), nullable=False)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str | None] = mapped_column(String(80))
+    category_source: Mapped[str | None] = mapped_column(String(16))
+    category_version: Mapped[str | None] = mapped_column(String(32))
+    category_labeled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class ExpenseLabelAttemptModel(Base):
+    __tablename__ = "expense_label_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "transaction_id", "policy_version", name="uq_expense_label_attempt_policy"
+        ),
+        Index("ix_expense_label_attempt_status_next", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    transaction_id: Mapped[UUID] = mapped_column(
+        ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False
+    )
+    policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    attempt_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(120))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class LedgerEntryModel(Base):

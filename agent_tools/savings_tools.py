@@ -82,6 +82,7 @@ class CreateSavingsPotTool(BaseBankingTool[SavingsPotCreateInput, SavingsPotOutp
     description = "Create an account-funded savings goal"
     action = "savings.create"
     risk_policy = "GREEN"
+    mutates_data = True
     input_model = SavingsPotCreateInput
     output_model = SavingsPotOutput
 
@@ -108,6 +109,7 @@ class ContributeSavingsPotTool(
     description = "Move funds from one of the user's accounts into a savings goal"
     action = "savings.contribute"
     risk_policy = "DYNAMIC"
+    mutates_data = True
     input_model = SavingsContributionInput
     output_model = SavingsContributionOutput
 

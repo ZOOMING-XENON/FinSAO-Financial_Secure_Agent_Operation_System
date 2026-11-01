@@ -1,10 +1,16 @@
+from datetime import datetime
+from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from banking_core.app.api.dependencies import get_current_user_id, get_db_session
+from banking_core.app.api.dependencies import (
+    get_current_user_id,
+    get_db_session,
+    get_labeling_worker_id,
+)
 from banking_core.app.schemas.analytics import (
     BudgetRequest,
     BudgetResponse,
@@ -12,21 +18,124 @@ from banking_core.app.schemas.analytics import (
     BudgetUpdateRequest,
     CancelSubscriptionRequest,
     CategoryCorrectionRequest,
+    ExpenseLabelWriteRequest,
+    ExpenseLabelAttemptRequest,
+    ExpenseSummaryResponse,
     ReminderRequest,
     ReminderResponse,
     SpendingSummaryResponse,
     SubscriptionResponse,
 )
-from banking_core.app.schemas.banking import TransactionResponse
+from banking_core.app.schemas.banking import LabelingTransactionResponse, TransactionResponse
 from banking_core.app.services.analytics import (
     BillAnalysisService,
     BudgetService,
     SubscriptionService,
 )
+from banking_core.app.services.expense_labeling import (
+    LabelAttempt,
+    ExpenseLabelingService,
+    LabelWrite,
+)
+from banking_core.app.services.expenses import ExpenseFilters, ExpenseService
 
 router = APIRouter(tags=["analytics"])
 Db = Annotated[Session, Depends(get_db_session)]
 Actor = Annotated[UUID, Depends(get_current_user_id)]
+LabelingWorker = Annotated[UUID, Depends(get_labeling_worker_id)]
+
+
+@router.get("/analytics/expenses/summary", response_model=ExpenseSummaryResponse)
+def expense_summary(
+    session: Db,
+    actor: Actor,
+    account_id: UUID | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    category: str | None = None,
+    merchant: str | None = None,
+    minimum_amount: Decimal | None = None,
+    maximum_amount: Decimal | None = None,
+) -> ExpenseSummaryResponse:
+    summary = ExpenseService(session).summary(
+        actor,
+        ExpenseFilters(
+            account_id=account_id,
+            start=start,
+            end=end,
+            category=category,
+            merchant=merchant,
+            minimum_amount=minimum_amount,
+            maximum_amount=maximum_amount,
+        ),
+    )
+    return ExpenseSummaryResponse(
+        total=summary.total,
+        transaction_count=summary.transaction_count,
+        totals_by_currency=summary.totals_by_currency,
+        by_category=summary.by_category,
+        by_merchant=summary.by_merchant,
+    )
+
+
+@router.get(
+    "/internal/expense-labeling/transactions",
+    response_model=list[LabelingTransactionResponse],
+)
+def pending_expense_labels(
+    session: Db,
+    worker: LabelingWorker,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[LabelingTransactionResponse]:
+    return [
+        LabelingTransactionResponse.model_validate(item)
+        for item in ExpenseLabelingService(session).pending(worker, limit=limit)
+    ]
+
+
+@router.post(
+    "/internal/expense-labeling/transactions/{transaction_id}/label",
+    response_model=TransactionResponse,
+)
+def write_expense_label(
+    transaction_id: UUID,
+    request: ExpenseLabelWriteRequest,
+    session: Db,
+    actor: LabelingWorker,
+) -> TransactionResponse:
+    transaction = ExpenseLabelingService(session).apply(
+        transaction_id,
+        actor,
+        LabelWrite(
+            category=request.category,
+            source=request.source,
+            observed_source=request.observed_source,
+            observed_version=request.observed_version,
+            version=request.version,
+        ),
+    )
+    return TransactionResponse.model_validate(transaction)
+
+
+@router.post(
+    "/internal/expense-labeling/transactions/{transaction_id}/attempt",
+    status_code=204,
+)
+def record_expense_label_attempt(
+    transaction_id: UUID,
+    request: ExpenseLabelAttemptRequest,
+    session: Db,
+    actor: LabelingWorker,
+) -> None:
+    ExpenseLabelingService(session).record_attempt(
+        transaction_id,
+        actor,
+        LabelAttempt(
+            policy_version=request.policy_version,
+            succeeded=request.succeeded,
+            error=request.error,
+        ),
+    )
 
 
 @router.get("/analytics/monthly-summary", response_model=SpendingSummaryResponse)
