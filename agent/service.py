@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable
 from typing import Any, Protocol
 from uuid import uuid4
@@ -21,6 +22,7 @@ from agent.contracts import (
     TaskPlan,
     TrustedAgentContext,
 )
+from agent.jev_http import JevUnavailable
 from agent.localization import (
     BUDGET_CATEGORIES,
     FIELD_LABELS,
@@ -33,6 +35,8 @@ from agent.responses import SafeResponseGenerator
 from agent.routing import REQUIRED_SLOTS_BY_INTENT, Intent, IntentResult, Route
 from agent_tools.contracts import ExecutionContext, ToolResult, ToolResultStatus
 
+logger = logging.getLogger(__name__)
+
 
 class Gateway(Protocol):
     async def execute(
@@ -44,6 +48,10 @@ class Router(Protocol):
     def route(
         self, text: str, *, conversation: list[Any] | None = None
     ) -> IntentResult | Awaitable[IntentResult]: ...
+
+
+class PlanReviewer(Protocol):
+    async def review_plan(self, text: str, plan: TaskPlan) -> float: ...
 
 
 class Planner(Protocol):
@@ -69,6 +77,8 @@ class AgentService:
         capabilities: CapabilityBroker,
         gateway: Gateway,
         responses: SafeResponseGenerator | None = None,
+        plan_reviewer: PlanReviewer | None = None,
+        plan_review_threshold: float = 0.5,
     ) -> None:
         self._router = router
         self._slots = slots
@@ -77,6 +87,8 @@ class AgentService:
         self._capabilities = capabilities
         self._gateway = gateway
         self._responses = responses or SafeResponseGenerator()
+        self._plan_reviewer = plan_reviewer
+        self._plan_review_threshold = plan_review_threshold
 
     async def handle(self, request: AgentRequest, context: TrustedAgentContext) -> AgentResponse:
         if request.confirmation is not None:
@@ -94,6 +106,17 @@ class AgentService:
             contextual_text, active_conversation = self._active_context(request)
             routed = self._router.route(request.message, conversation=active_conversation)
             intent = await routed if isinstance(routed, Awaitable) else routed
+            if intent.intent == Intent.CORRECT_EXPENSE_CATEGORY:
+                return AgentResponse(
+                    request_id=request.request_id,
+                    session_id=request.session_id,
+                    task_id=context.task_id,
+                    status=AgentResponseStatus.NEEDS_CLARIFICATION,
+                    message=(
+                        "Category correction is available only through the structured "
+                        "transaction view in v1."
+                    ),
+                )
             if intent.intent == Intent.GENERAL_CHAT:
                 reply = intent.reply
                 if is_english(request.locale) and (not reply or contains_cjk(reply)):
@@ -141,19 +164,20 @@ class AgentService:
             verified = self._verifier.verify(plan, actions)
         except PlanValidationError as exc:
             needs_input = exc.code in {"INFERRED_ARGUMENT", "MISSING_SLOTS"}
-            if is_english(request.locale):
-                validation_message = (
+            validation_message = (
+                (
                     "The plan contains financial details that you have not confirmed. "
                     "Please provide or confirm them."
                     if needs_input
                     else "The plan did not pass deterministic safety checks."
                 )
-            else:
-                validation_message = (
+                if is_english(request.locale)
+                else (
                     "计划包含未经用户确认的金融参数，请补充或明确相关信息。"
                     if needs_input
                     else "计划未通过确定性安全校验。"
                 )
+            )
             return AgentResponse(
                 request_id=request.request_id,
                 session_id=request.session_id,
@@ -166,6 +190,43 @@ class AgentService:
                 message=validation_message,
                 error=AgentError(code=exc.code, message=str(exc)),
             )
+        if self._plan_reviewer is not None:
+            try:
+                review = await self._plan_reviewer.review_plan(request.message, plan)
+            except (JevUnavailable, TimeoutError) as exc:
+                logger.warning("plan review unavailable: %s", type(exc).__name__)
+                return AgentResponse(
+                    request_id=request.request_id,
+                    session_id=request.session_id,
+                    task_id=context.task_id,
+                    status=AgentResponseStatus.NEEDS_CLARIFICATION,
+                    message=(
+                        "Plan review is temporarily unavailable; no action was executed."
+                        if is_english(request.locale)
+                        else "计划复核暂不可用，未执行任何操作。"
+                    ),
+                    plan=localize_plan(plan, request.locale),
+                    error=AgentError(
+                        code="PLAN_REVIEW_UNAVAILABLE",
+                        message="plan review provider unavailable",
+                    ),
+                )
+            if review < self._plan_review_threshold:
+                return AgentResponse(
+                    request_id=request.request_id,
+                    session_id=request.session_id,
+                    task_id=context.task_id,
+                    status=AgentResponseStatus.NEEDS_CLARIFICATION,
+                    message=(
+                        "The plan does not match the request. Please clarify your request."
+                        if is_english(request.locale)
+                        else "计划与请求不一致，请补充或明确需求。"
+                    ),
+                    plan=localize_plan(plan, request.locale),
+                    error=AgentError(
+                        code="PLAN_REVIEW_REJECTED", message="plan review below threshold"
+                    ),
+                )
         execution_context = ExecutionContext(
             authenticated_user_id=context.authenticated_user_id,
             session_id=context.session_id,
@@ -219,7 +280,6 @@ class AgentService:
                     status=response_status,
                     plan=public_plan,
                     data=data,
-                    locale=request.locale,
                 )
             ),
             plan=public_plan,
@@ -377,21 +437,7 @@ class AgentService:
         ]
         inferred_labels = [field.label for field in fields if field.inferred]
         missing_labels = [labels.get(name, name.replace("_", " ")) for name in slots.missing]
-        if is_english(request.locale):
-            if intent.intent == Intent.TRANSFER:
-                message = (
-                    "Choose a paying account and enter or select a saved recipient. "
-                    "You never need to copy an internal UUID."
-                )
-            elif inferred_labels:
-                suffix = f" and provide {', '.join(missing_labels)}" if missing_labels else ""
-                message = (
-                    f"I inferred {', '.join(inferred_labels)} from the context{suffix}. "
-                    "Review the form and confirm."
-                )
-            else:
-                message = f"To continue, provide {', '.join(missing_labels)}."
-        elif intent.intent == Intent.TRANSFER:
+        if intent.intent == Intent.TRANSFER:
             message = "请选择付款账户，并输入或选择以前保存的收款人；系统不会要求你复制内部 UUID。"
         elif inferred_labels:
             suffix = f"，并补充：{'、'.join(missing_labels)}" if missing_labels else ""

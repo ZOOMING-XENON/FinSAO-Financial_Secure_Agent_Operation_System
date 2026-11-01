@@ -43,6 +43,7 @@ class BaseBankingTool(ABC, Generic[InputT, OutputT]):
     description: str
     action: str
     risk_policy: str
+    mutates_data: bool = False
     input_model: type[InputT]
     output_model: type[OutputT]
 
@@ -55,6 +56,7 @@ class BaseBankingTool(ABC, Generic[InputT, OutputT]):
             "description": self.description,
             "action": self.action,
             "risk_policy": self.risk_policy,
+            "mutates_data": self.mutates_data,
             "input_schema": self.input_model.model_json_schema(),
             "output_schema": self.output_model.model_json_schema(),
         }

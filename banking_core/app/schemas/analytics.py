@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -73,3 +74,22 @@ class SubscriptionResponse(AnalyticsModel):
 
 class CancelSubscriptionRequest(BaseModel):
     authorization_ref: str
+
+class ExpenseSummaryResponse(BaseModel):
+    total: Decimal | None
+    transaction_count: int
+    totals_by_currency: dict[str, Decimal]
+    by_category: dict[str, dict[str, Decimal]]
+    by_merchant: dict[str, dict[str, Decimal]]
+
+class ExpenseLabelWriteRequest(BaseModel):
+    category: str = Field(min_length=1, max_length=80)
+    source: Literal["JEV", "RULE"]
+    observed_source: str | None = None
+    observed_version: str | None = None
+    version: str = Field(min_length=1, max_length=32)
+
+class ExpenseLabelAttemptRequest(BaseModel):
+    policy_version: str = Field(min_length=1, max_length=32)
+    succeeded: bool
+    error: str | None = Field(default=None, max_length=120)

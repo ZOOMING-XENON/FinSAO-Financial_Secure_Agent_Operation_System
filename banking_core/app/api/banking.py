@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query
@@ -18,14 +18,17 @@ from banking_core.app.schemas.banking import (
     BeneficiaryResolutionResponse,
     BeneficiaryResponse,
     CommitTransferRequest,
+    RecentRecipientResponse,
     TransactionPage,
     TransferDraftRequest,
     TransferDraftResponse,
     TransferReceipt,
 )
 from banking_core.app.security.transfer_authorization import TransferAuthorizationVerifier
-from banking_core.app.services.accounts import AccountService, TransactionFilters
+from banking_core.app.services.accounts import AccountService
 from banking_core.app.services.beneficiaries import BeneficiaryService
+from banking_core.app.services.expenses import ExpenseFilters, ExpenseService
+from banking_core.app.services.recipients import RecentRecipientService
 from banking_core.app.services.transfers import TransferService
 
 router = APIRouter()
@@ -50,6 +53,41 @@ def get_balance(account_id: UUID, session: Db, actor_id: Actor) -> BalanceRespon
     )
 
 
+def _expense_page(
+    session: Session,
+    actor_id: UUID,
+    *,
+    account_id: UUID | None,
+    start: datetime | None,
+    end: datetime | None,
+    limit: int,
+    offset: int,
+    category: str | None,
+    merchant: str | None,
+    minimum_amount: Decimal | None,
+    maximum_amount: Decimal | None,
+    sort_by: Literal["posted_at", "amount", "category", "merchant"],
+    sort_direction: Literal["asc", "desc"],
+) -> TransactionPage:
+    items = ExpenseService(session).list(
+        actor_id,
+        ExpenseFilters(
+            account_id=account_id,
+            start=start,
+            end=end,
+            limit=limit,
+            offset=offset,
+            category=category,
+            merchant=merchant,
+            minimum_amount=minimum_amount,
+            maximum_amount=maximum_amount,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+        ),
+    )
+    return TransactionPage(items=items, limit=limit, offset=offset)
+
+
 @router.get(
     "/accounts/{account_id}/transactions", response_model=TransactionPage, tags=["accounts"]
 )
@@ -60,27 +98,89 @@ def get_transactions(
     start: datetime | None = None,
     end: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=1000)] = 0,
     category: str | None = None,
     merchant: str | None = None,
     minimum_amount: Decimal | None = None,
     maximum_amount: Decimal | None = None,
+    sort_by: Literal["posted_at", "amount", "category", "merchant"] = "posted_at",
+    sort_direction: Literal["asc", "desc"] = "desc",
 ) -> TransactionPage:
-    items = AccountService(session).get_transactions(
-        account_id,
+    return _expense_page(
+        session,
         actor_id,
-        TransactionFilters(
-            start=start,
-            end=end,
-            limit=limit,
-            offset=offset,
-            category=category,
-            merchant=merchant,
-            minimum_amount=minimum_amount,
-            maximum_amount=maximum_amount,
-        ),
+        account_id=account_id,
+        start=start,
+        end=end,
+        limit=limit,
+        offset=offset,
+        category=category,
+        merchant=merchant,
+        minimum_amount=minimum_amount,
+        maximum_amount=maximum_amount,
+        sort_by=sort_by,
+        sort_direction=sort_direction,
     )
-    return TransactionPage(items=items, limit=limit, offset=offset)
+
+
+@router.get("/transactions", response_model=TransactionPage, tags=["accounts"])
+def list_expenses(
+    session: Db,
+    actor_id: Actor,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0, le=1000)] = 0,
+    category: str | None = None,
+    merchant: str | None = None,
+    minimum_amount: Decimal | None = None,
+    maximum_amount: Decimal | None = None,
+    sort_by: Literal["posted_at", "amount", "category", "merchant"] = "posted_at",
+    sort_direction: Literal["asc", "desc"] = "desc",
+) -> TransactionPage:
+    return _expense_page(
+        session,
+        actor_id,
+        account_id=None,
+        start=start,
+        end=end,
+        limit=limit,
+        offset=offset,
+        category=category,
+        merchant=merchant,
+        minimum_amount=minimum_amount,
+        maximum_amount=maximum_amount,
+        sort_by=sort_by,
+        sort_direction=sort_direction,
+    )
+
+
+@router.get(
+    "/recipients/recent",
+    response_model=list[RecentRecipientResponse],
+    tags=["beneficiaries"],
+)
+def recent_recipients(
+    session: Db,
+    actor_id: Actor,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> list[RecentRecipientResponse]:
+    return [
+        RecentRecipientResponse(
+            destination_account_id=item.destination_account_id,
+            display_name=item.display_name,
+            masked_account=item.masked_account,
+            last_transfer_at=item.last_transfer_at,
+            last_amount=item.last_amount,
+            currency=item.currency,
+            beneficiary_id=item.beneficiary_id,
+        )
+        for item in RecentRecipientService(session).list(
+            actor_id, start=start, end=end, limit=limit
+        )
+    ]
 
 
 @router.get("/beneficiaries", response_model=list[BeneficiaryResponse], tags=["beneficiaries"])
