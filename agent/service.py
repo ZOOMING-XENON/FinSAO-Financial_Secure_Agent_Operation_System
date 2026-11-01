@@ -21,6 +21,13 @@ from agent.contracts import (
     TaskPlan,
     TrustedAgentContext,
 )
+from agent.localization import (
+    BUDGET_CATEGORIES,
+    FIELD_LABELS,
+    contains_cjk,
+    is_english,
+    localize_plan,
+)
 from agent.planning import PlanValidationError, PlanVerifier
 from agent.responses import SafeResponseGenerator
 from agent.routing import REQUIRED_SLOTS_BY_INTENT, Intent, IntentResult, Route
@@ -88,21 +95,31 @@ class AgentService:
             routed = self._router.route(request.message, conversation=active_conversation)
             intent = await routed if isinstance(routed, Awaitable) else routed
             if intent.intent == Intent.GENERAL_CHAT:
+                reply = intent.reply
+                if is_english(request.locale) and (not reply or contains_cjk(reply)):
+                    reply = "Hello! I can help with your bank accounts and financial tasks."
                 return AgentResponse(
                     request_id=request.request_id,
                     session_id=request.session_id,
                     task_id=context.task_id,
                     status=AgentResponseStatus.COMPLETED,
-                    message=intent.reply or "你好，我可以帮助你处理银行账户与财务任务。",
+                    message=reply or "你好，我可以帮助你处理银行账户与财务任务。",
                 )
             if intent.route == Route.SAFE_FALLBACK:
+                fallback = intent.reply
+                if is_english(request.locale) and (not fallback or contains_cjk(fallback)):
+                    fallback = (
+                        "I couldn't identify that request safely. Please describe the account, "
+                        "spending, budget, subscription, card, investment, savings, or transfer "
+                        "task you want to complete."
+                    )
                 return AgentResponse(
                     request_id=request.request_id,
                     session_id=request.session_id,
                     task_id=context.task_id,
                     status=AgentResponseStatus.NEEDS_CLARIFICATION,
                     message=(
-                        intent.reply
+                        fallback
                         or "当前请求无法安全识别，请明确说明账户、消费、预算、订阅、银行卡、"
                         "理财、储蓄罐或转账需求。"
                     ),
@@ -124,6 +141,19 @@ class AgentService:
             verified = self._verifier.verify(plan, actions)
         except PlanValidationError as exc:
             needs_input = exc.code in {"INFERRED_ARGUMENT", "MISSING_SLOTS"}
+            if is_english(request.locale):
+                validation_message = (
+                    "The plan contains financial details that you have not confirmed. "
+                    "Please provide or confirm them."
+                    if needs_input
+                    else "The plan did not pass deterministic safety checks."
+                )
+            else:
+                validation_message = (
+                    "计划包含未经用户确认的金融参数，请补充或明确相关信息。"
+                    if needs_input
+                    else "计划未通过确定性安全校验。"
+                )
             return AgentResponse(
                 request_id=request.request_id,
                 session_id=request.session_id,
@@ -133,11 +163,7 @@ class AgentService:
                     if needs_input
                     else AgentResponseStatus.FAILED
                 ),
-                message=(
-                    "计划包含未经用户确认的金融参数，请补充或明确相关信息。"
-                    if needs_input
-                    else "计划未通过确定性安全校验。"
-                ),
+                message=validation_message,
                 error=AgentError(code=exc.code, message=str(exc)),
             )
         execution_context = ExecutionContext(
@@ -165,8 +191,12 @@ class AgentService:
                 session_id=request.session_id,
                 task_id=context.task_id,
                 status=AgentResponseStatus.FAILED,
-                message="计划没有可执行步骤。",
-                plan=plan,
+                message=(
+                    "The plan has no executable steps."
+                    if is_english(request.locale)
+                    else "计划没有可执行步骤。"
+                ),
+                plan=localize_plan(plan, request.locale),
                 error=AgentError(code="NO_EXECUTABLE_STEP", message="empty execution"),
             )
         response_status = (
@@ -178,15 +208,21 @@ class AgentService:
             else AgentResponseStatus.FAILED
         )
         data = last_result.data.model_dump(mode="json") if last_result.data is not None else None
+        public_plan = localize_plan(plan, request.locale)
         return AgentResponse(
             request_id=request.request_id,
             session_id=request.session_id,
             task_id=context.task_id,
             status=response_status,
             message=(
-                self._responses.compose(status=response_status, plan=plan, data=data)
+                self._responses.compose(
+                    status=response_status,
+                    plan=public_plan,
+                    data=data,
+                    locale=request.locale,
+                )
             ),
-            plan=plan,
+            plan=public_plan,
             result=data,
             error=(
                 None
@@ -231,21 +267,7 @@ class AgentService:
         intent: IntentResult,
         slots: SlotState,
     ) -> AgentResponse:
-        labels = {
-            "category": "预算类别",
-            "month_date": "预算月份",
-            "limit_amount": "预算上限",
-            "source_account_id": "付款账户",
-            "destination_account_id": "收款人（可输入姓名自动匹配）",
-            "amount": "金额",
-            "currency": "币种",
-            "name": "储蓄目标名称",
-            "target_amount": "目标金额",
-            "target_date": "目标日期",
-            "account_id": "账户",
-            "product_id": "理财产品",
-            "resource_id": "目标资源",
-        }
+        labels = FIELD_LABELS[request.locale]
         input_types = {
             "category": "combobox",
             "month_date": "month",
@@ -260,17 +282,15 @@ class AgentService:
         options: dict[str, list[ClarificationOption]] = {}
         if intent.intent == Intent.CREATE_BUDGET:
             options["category"] = [
-                ClarificationOption(value=label, label=f"{label}（{value}）")
-                for value, label in {
-                    "HOUSEHOLD": "家居",
-                    "GROCERIES": "日用",
-                    "TRANSPORT": "交通",
-                    "ENTERTAINMENT": "娱乐",
-                    "DINING": "餐饮",
-                    "HEALTHCARE": "医疗",
-                    "EDUCATION": "教育",
-                    "TRAVEL": "旅行",
-                }.items()
+                ClarificationOption(
+                    value=label,
+                    label=(
+                        f"{label} ({value})"
+                        if is_english(request.locale)
+                        else f"{label}（{value}）"
+                    ),
+                )
+                for value, label in BUDGET_CATEGORIES[request.locale].items()
             ]
         execution_context = ExecutionContext(
             authenticated_user_id=context.authenticated_user_id,
@@ -305,8 +325,18 @@ class AgentService:
                         value=str(item["destination_account_id"]),
                         label=(
                             f'{item["name"]}'
-                            + (f'（{item["nickname"]}）' if item.get("nickname") else "")
-                            + f' · 尾号 {str(item["destination_account_number"])[-4:]}'
+                            + (
+                                f' ({item["nickname"]})'
+                                if is_english(request.locale) and item.get("nickname")
+                                else f'（{item["nickname"]}）'
+                                if item.get("nickname")
+                                else ""
+                            )
+                            + (
+                                f' · ending in {str(item["destination_account_number"])[-4:]}'
+                                if is_english(request.locale)
+                                else f' · 尾号 {str(item["destination_account_number"])[-4:]}'
+                            )
                         ),
                     )
                     for item in items
@@ -347,7 +377,21 @@ class AgentService:
         ]
         inferred_labels = [field.label for field in fields if field.inferred]
         missing_labels = [labels.get(name, name.replace("_", " ")) for name in slots.missing]
-        if intent.intent == Intent.TRANSFER:
+        if is_english(request.locale):
+            if intent.intent == Intent.TRANSFER:
+                message = (
+                    "Choose a paying account and enter or select a saved recipient. "
+                    "You never need to copy an internal UUID."
+                )
+            elif inferred_labels:
+                suffix = f" and provide {', '.join(missing_labels)}" if missing_labels else ""
+                message = (
+                    f"I inferred {', '.join(inferred_labels)} from the context{suffix}. "
+                    "Review the form and confirm."
+                )
+            else:
+                message = f"To continue, provide {', '.join(missing_labels)}."
+        elif intent.intent == Intent.TRANSFER:
             message = "请选择付款账户，并输入或选择以前保存的收款人；系统不会要求你复制内部 UUID。"
         elif inferred_labels:
             suffix = f"，并补充：{'、'.join(missing_labels)}" if missing_labels else ""

@@ -244,7 +244,11 @@ async def test_online_langgraph_reconciles_unknown_mutation_outcome() -> None:
         uuid4(),
     )
     config = {"configurable": {"thread_id": str(task_id)}}
-    request = AgentRequest(session_id=session_id, message=f"冻结银行卡 {card_id}")
+    request = AgentRequest(
+        session_id=session_id,
+        message=f"冻结银行卡 {card_id}",
+        locale="en-US",
+    )
     waiting = await graph.ainvoke(
         {
             "task_id": str(task_id),
@@ -269,6 +273,8 @@ async def test_online_langgraph_reconciles_unknown_mutation_outcome() -> None:
     assert completed["status"] == "COMPLETED"
     assert completed["response"]["status"] == "COMPLETED"
     assert completed["response"]["result"]["status"] == "FROZEN"
+    assert "操作" not in completed["response"]["message"]
+    assert "Banking Core status check" in completed["response"]["message"]
     assert gateway.calls == ["freeze_card", "freeze_card", "get_card_status"]
 
 

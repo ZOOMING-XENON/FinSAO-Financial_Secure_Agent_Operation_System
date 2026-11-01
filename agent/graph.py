@@ -13,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from agent.contracts import AgentRequest, AgentResponse, AgentResponseStatus, TrustedAgentContext
+from agent.localization import contains_cjk, is_english
 from agent.service import AgentService, Gateway
 from agent_tools.contracts import ExecutionContext, ToolResultStatus
 
@@ -189,6 +190,8 @@ def build_runtime_agent_graph(
 
     async def commit(state: AgentState) -> AgentState:
         raw_context = state["context"]
+        locale = str(state.get("request", {}).get("locale", "zh-CN"))
+        english = is_english(locale)
         result_reference = state.get("result_reference", {})
         response = AgentResponse.model_validate(state["response"])
         steps = response.plan.steps if response.plan else []
@@ -199,7 +202,11 @@ def build_runtime_agent_graph(
             failed = response.model_copy(
                 update={
                     "status": AgentResponseStatus.FAILED,
-                    "message": "待审批任务没有可恢复的工具调用。",
+                    "message": (
+                        "The approval task has no tool call that can be resumed."
+                        if english
+                        else "待审批任务没有可恢复的工具调用。"
+                    ),
                 }
             )
             return {"status": "FAILED", "response": failed.model_dump(mode="json")}
@@ -220,7 +227,11 @@ def build_runtime_agent_graph(
                 failed = response.model_copy(
                     update={
                         "status": AgentResponseStatus.FAILED,
-                        "message": "待审批草稿缺少可信资源 ID。",
+                        "message": (
+                            "The approval draft has no trusted resource ID."
+                            if english
+                            else "待审批草稿缺少可信资源 ID。"
+                        ),
                     }
                 )
                 return {"status": "FAILED", "response": failed.model_dump(mode="json")}
@@ -239,7 +250,11 @@ def build_runtime_agent_graph(
             failed = response.model_copy(
                 update={
                     "status": AgentResponseStatus.FAILED,
-                    "message": "该待审批工具尚未实现统一恢复执行。",
+                    "message": (
+                        "This approval task cannot be resumed yet."
+                        if english
+                        else "该待审批工具尚未实现统一恢复执行。"
+                    ),
                 }
             )
             return {"status": "FAILED", "response": failed.model_dump(mode="json")}
@@ -270,7 +285,12 @@ def build_runtime_agent_graph(
                         completed = response.model_copy(
                             update={
                                 "status": AgentResponseStatus.COMPLETED,
-                                "message": "已通过 Banking Core 状态查询确认操作完成。",
+                                "message": (
+                                    "A Banking Core status check confirmed that the "
+                                    "operation completed."
+                                    if english
+                                    else "已通过 Banking Core 状态查询确认操作完成。"
+                                ),
                                 "result": payload,
                                 "error": None,
                             }
@@ -283,7 +303,12 @@ def build_runtime_agent_graph(
             failed = response.model_copy(
                 update={
                     "status": AgentResponseStatus.FAILED,
-                    "message": "Banking Core 返回结果未知，且状态查询未能确认操作完成。",
+                    "message": (
+                        "The Banking Core result is unknown, and a status check could not "
+                        "confirm completion."
+                        if english
+                        else "Banking Core 返回结果未知，且状态查询未能确认操作完成。"
+                    ),
                     "error": {
                         "code": "UNKNOWN_OUTCOME",
                         "message": "manual reconciliation required",
@@ -296,7 +321,11 @@ def build_runtime_agent_graph(
             completed = response.model_copy(
                 update={
                     "status": AgentResponseStatus.COMPLETED,
-                    "message": "审批已验证，操作结果来自 Banking Core。",
+                    "message": (
+                        "Approval was verified, and the result came from Banking Core."
+                        if english
+                        else "审批已验证，操作结果来自 Banking Core。"
+                    ),
                     "result": data,
                     "error": None,
                 }
@@ -309,7 +338,13 @@ def build_runtime_agent_graph(
         failed = response.model_copy(
             update={
                 "status": AgentResponseStatus.FAILED,
-                "message": result.message or "Banking Core 未确认操作成功。",
+                "message": (
+                    result.message
+                    if result.message and (not english or not contains_cjk(result.message))
+                    else "Banking Core did not confirm that the operation succeeded."
+                    if english
+                    else "Banking Core 未确认操作成功。"
+                ),
             }
         )
         return {"status": "FAILED", "response": failed.model_dump(mode="json")}
