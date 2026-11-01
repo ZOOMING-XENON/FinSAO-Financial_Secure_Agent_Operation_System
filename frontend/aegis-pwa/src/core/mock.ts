@@ -165,6 +165,20 @@ export function mockCore(method: string, path: string, q: Record<string, string>
     if (!(id in db.balances)) return err(404, 'NOT_FOUND', 'account not found');
     return [200, { account_id: id, balance: fromCents(db.balances[id]), currency: 'CNY' }];
   }
+  if (method === 'GET' && path === '/activity') {
+    const limit = Number(q.limit || 50);
+    const offset = Number(q.offset || 0);
+    const items = [...db.tx]
+      .sort((a, c) => c.posted_at.localeCompare(a.posted_at))
+      .slice(offset, offset + limit)
+      .map(t => ({
+        ...publicTx(t),
+        direction: t.category === 'INTERNAL_TRANSFER' ? 'MOVE' : t.out ? 'DEBIT' : 'CREDIT',
+        kind: t.category === 'INTERNAL_TRANSFER' ? 'TRANSFER' : t.category === 'OPENING_BALANCE' ? 'OPENING_BALANCE' : t.out ? 'EXPENSE' : 'INCOME',
+        origin: 'BANK',
+      }));
+    return [200, { items, limit, offset }];
+  }
   if (method === 'GET' && (r = m(/^\/accounts\/([^/]+)\/transactions$/))) {
     const limit = Number(q.limit || 50);
     const offset = Number(q.offset || 0);

@@ -25,6 +25,8 @@ from banking_core.app.domain.enums import (
     CardStatus,
     Currency,
     RiskTier,
+    TransactionKind,
+    TransactionOrigin,
     TransactionStatus,
     TransferStatus,
     WealthOrderType,
@@ -107,21 +109,43 @@ class BeneficiaryModel(TimestampMixin, Base):
 
 class TransactionModel(TimestampMixin, Base):
     __tablename__ = "transactions"
-    __table_args__ = (CheckConstraint("amount > 0", name="ck_transactions_positive_amount"),)
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_transactions_positive_amount"),
+        UniqueConstraint(
+            "user_id", "idempotency_key", name="uq_transactions_user_idempotency"
+        ),
+        Index("ix_transactions_user_kind_posted", "user_id", "kind", "posted_at"),
+        Index("ix_transactions_account_posted", "account_id", "posted_at"),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), index=True)
+    account_id: Mapped[UUID | None] = mapped_column(ForeignKey("accounts.id"))
     reference: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     status: Mapped[TransactionStatus] = mapped_column(
         enum_column(TransactionStatus, "transaction_status"), nullable=False
     )
+    kind: Mapped[TransactionKind] = mapped_column(
+        enum_column(TransactionKind, "transaction_kind"),
+        default=TransactionKind.EXPENSE,
+        nullable=False,
+    )
+    origin: Mapped[TransactionOrigin] = mapped_column(
+        enum_column(TransactionOrigin, "transaction_origin"),
+        default=TransactionOrigin.BANK,
+        nullable=False,
+    )
     amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     currency: Mapped[Currency] = mapped_column(enum_column(Currency, "currency"), nullable=False)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
+    merchant: Mapped[str | None] = mapped_column(String(120))
     category: Mapped[str | None] = mapped_column(String(80))
     category_source: Mapped[str | None] = mapped_column(String(16))
     category_version: Mapped[str | None] = mapped_column(String(32))
     category_labeled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ExpenseLabelAttemptModel(Base):

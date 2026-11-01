@@ -4,7 +4,29 @@ export type Money = string;
 export type Currency = 'CNY' | 'USD' | 'EUR';
 export type RiskTier = 'GREEN' | 'YELLOW' | 'RED';
 
-export const CATEGORIES = ['HOUSEHOLD', 'GROCERIES', 'TRANSPORT', 'ENTERTAINMENT', 'DINING', 'UNKNOWN'] as const;
+export const CATEGORIES = [
+  'HOUSEHOLD',
+  'GROCERIES',
+  'TRANSPORT',
+  'ENTERTAINMENT',
+  'SUBSCRIPTIONS',
+  'DINING',
+  'UTILITIES',
+  'HEALTHCARE',
+  'EDUCATION',
+  'CHILDCARE',
+  'TRAVEL',
+  'SHOPPING',
+  'PERSONAL_CARE',
+  'PETS',
+  'GIFTS',
+  'INSURANCE',
+  'TAXES',
+  'FEES',
+  'REPAIRS',
+  'OTHER',
+  'UNKNOWN',
+] as const;
 export type Category = (typeof CATEGORIES)[number];
 
 export interface Account {
@@ -25,10 +47,16 @@ export interface Transaction {
   id: string;
   reference: string;
   status: 'PENDING' | 'COMPLETED' | 'FAILED' | 'REVERSED';
+  kind?: 'EXPENSE' | 'INCOME' | 'REFUND' | 'TRANSFER' | 'OPENING_BALANCE' | 'ADJUSTMENT';
+  origin?: 'BANK' | 'CARD' | 'CASH' | 'MANUAL' | 'IMPORT';
+  direction?: 'DEBIT' | 'CREDIT' | 'MOVE' | null;
+  account_id?: string | null;
   amount: Money;
   currency: Currency;
   description: string;
+  merchant?: string | null;
   category: string | null;
+  category_source?: string | null;
   posted_at: string | null;
   /** Set only on cash-ledger entries shown alongside bank transactions: the ledger category id. */
   cash?: string;

@@ -75,11 +75,19 @@ _service = AgentService(
         ExpenseRouter(
             RuleRouter(),
             enabled=_settings.expense_chat_enabled and _settings.expense_tracking_enabled,
+            capture_enabled=(
+                _settings.expense_capture_enabled
+                and _settings.expense_capture_chat_enabled
+            ),
         ),
         _model_provider,
         routing_mode=_settings.agent_routing_mode,
         jev_adapter=_jev_adapter,
         jev_enabled=_settings.jev_enabled,
+        jev_min_confidence=_settings.jev_intent_min_confidence,
+        jev_expense_min_confidence=_settings.jev_expense_intent_min_confidence,
+        jev_max_injection=_settings.jev_max_injection,
+        jev_min_in_scope=_settings.jev_min_in_scope,
         privacy_broker=_privacy_broker,
     ),
     slots=SlotTracker(),
@@ -99,6 +107,7 @@ _service = AgentService(
         if _settings.jev_enabled and _settings.jev_pass2_enabled
         else None
     ),
+    plan_review_threshold=_settings.jev_plan_review_min,
 )
 _task_store = SqlAlchemyTaskStore(_settings.agent_database_url)
 _runtime_graph = build_runtime_agent_graph(_service, _gateway, MemorySaver())

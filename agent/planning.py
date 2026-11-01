@@ -115,6 +115,81 @@ class BaselinePlanner:
                 )
             )
             return TaskPlan(goal="查询余额并创建转账草稿", steps=steps)
+        if intent.intent == Intent.RECORD_EXPENSE:
+            if system_idempotency_key is None:
+                raise PlanValidationError("MISSING_SYSTEM_IDEMPOTENCY", "task-bound key required")
+            allowed = {
+                "amount",
+                "currency",
+                "merchant",
+                "category",
+                "occurred_at",
+                "account_id",
+                "origin",
+            }
+            arguments = {
+                name: fact.value for name, fact in slots.facts.items() if name in allowed
+            }
+            arguments["idempotency_key"] = system_idempotency_key
+            sources = {
+                name: self._argument_source(slots.facts[name])
+                for name in arguments
+                if name in slots.facts
+            }
+            sources["idempotency_key"] = ArgumentSource(
+                kind=ArgumentSourceKind.SYSTEM_CONSTANT, reference="trusted task id binding"
+            )
+            return TaskPlan(
+                goal="Record an expense",
+                steps=[
+                    PlanStep(
+                        step_id="record_expense",
+                        purpose="Record an expense",
+                        tool_call=ToolCall(tool_name="record_expense", arguments=arguments),
+                        argument_sources=sources,
+                    )
+                ],
+            )
+        if intent.intent in {Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}:
+            tool_name = (
+                "update_expense" if intent.intent == Intent.UPDATE_EXPENSE else "delete_expense"
+            )
+            allowed = (
+                {
+                    "expense_id",
+                    "amount",
+                    "currency",
+                    "merchant",
+                    "category",
+                    "occurred_at",
+                    "account_id",
+                }
+                if intent.intent == Intent.UPDATE_EXPENSE
+                else {"expense_id"}
+            )
+            arguments = {
+                name: fact.value for name, fact in slots.facts.items() if name in allowed
+            }
+            if "expense_id" not in arguments:
+                raise PlanValidationError("MISSING_SLOTS", "expense_id")
+            sources = {
+                name: self._argument_source(slots.facts[name]) for name in arguments
+            }
+            return TaskPlan(
+                goal="Update an expense" if tool_name == "update_expense" else "Delete an expense",
+                steps=[
+                    PlanStep(
+                        step_id=tool_name,
+                        purpose=(
+                            "Update an expense"
+                            if tool_name == "update_expense"
+                            else "Delete an expense"
+                        ),
+                        tool_call=ToolCall(tool_name=tool_name, arguments=arguments),
+                        argument_sources=sources,
+                    )
+                ],
+            )
         if intent.intent in {Intent.TRACK_EXPENSES, Intent.SUMMARIZE_EXPENSES}:
             tool_name = (
                 "get_expenses"

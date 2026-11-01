@@ -6,17 +6,12 @@ from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from banking_core.app.domain.enums import TransactionStatus
-from banking_core.app.persistence.models import AccountModel, LedgerEntryModel, TransactionModel
-from shared.expense_taxonomy import (
-    EXCLUDED_EXPENSE_CATEGORIES,
-    escape_like,
-    normalize_category,
-    normalize_merchant,
-)
+from banking_core.app.domain.enums import TransactionKind, TransactionStatus
+from banking_core.app.persistence.models import TransactionModel
+from shared.expense_taxonomy import escape_like, normalize_category, normalize_merchant
 
 MAX_MERCHANT_GROUPS = 100
 
@@ -50,22 +45,15 @@ class ExpenseService:
         self.session = session
 
     def _base_query(self, user_id: UUID, filters: ExpenseFilters) -> Any:
-        query = (
-            select(TransactionModel)
-            .join(LedgerEntryModel, LedgerEntryModel.transaction_id == TransactionModel.id)
-            .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
-            .where(
-                AccountModel.user_id == user_id,
-                LedgerEntryModel.credit > 0,
-                TransactionModel.status == TransactionStatus.COMPLETED,
-                or_(
-                    TransactionModel.category.is_(None),
-                    TransactionModel.category.notin_(EXCLUDED_EXPENSE_CATEGORIES),
-                ),
-            )
+        merchant_expr = func.coalesce(TransactionModel.merchant, TransactionModel.description)
+        query = select(TransactionModel).where(
+            TransactionModel.user_id == user_id,
+            TransactionModel.kind == TransactionKind.EXPENSE,
+            TransactionModel.status == TransactionStatus.COMPLETED,
+            TransactionModel.deleted_at.is_(None),
         )
         if filters.account_id is not None:
-            query = query.where(LedgerEntryModel.account_id == filters.account_id)
+            query = query.where(TransactionModel.account_id == filters.account_id)
         if filters.start is not None:
             query = query.where(TransactionModel.posted_at >= filters.start)
         if filters.end is not None:
@@ -74,9 +62,7 @@ class ExpenseService:
             query = query.where(TransactionModel.category == normalize_category(filters.category))
         if filters.merchant is not None:
             query = query.where(
-                TransactionModel.description.ilike(
-                    f"%{escape_like(filters.merchant)}%", escape="\\"
-                )
+                merchant_expr.ilike(f"%{escape_like(filters.merchant)}%", escape="\\")
             )
         if filters.minimum_amount is not None:
             query = query.where(TransactionModel.amount >= filters.minimum_amount)
@@ -91,7 +77,7 @@ class ExpenseService:
             "posted_at": TransactionModel.posted_at,
             "amount": TransactionModel.amount,
             "category": TransactionModel.category,
-            "merchant": TransactionModel.description,
+            "merchant": func.coalesce(TransactionModel.merchant, TransactionModel.description),
         }[filters.sort_by]
         order = sort_column.asc() if filters.sort_direction == "asc" else sort_column.desc()
         query = self._base_query(user_id, filters).order_by(
@@ -118,7 +104,7 @@ class ExpenseService:
             by_category[currency][category] = (
                 by_category[currency].get(category, Decimal("0.00")) + amount
             )
-            merchant = normalize_merchant(transaction.description)
+            merchant = normalize_merchant(transaction.merchant or transaction.description)
             if not merchant:
                 merchant = "unknown"
             by_merchant.setdefault(currency, {})

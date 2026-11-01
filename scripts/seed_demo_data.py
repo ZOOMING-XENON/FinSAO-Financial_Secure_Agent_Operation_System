@@ -16,6 +16,8 @@ from banking_core.app.domain.enums import (
     CardStatus,
     Currency,
     RiskTier,
+    TransactionKind,
+    TransactionOrigin,
     TransactionStatus,
 )
 from banking_core.app.persistence.database import get_session_factory
@@ -82,16 +84,41 @@ def add_posting(
     description: str,
     category: str,
 ) -> None:
+    debit_account = session.get(AccountModel, debit_account_id)
+    credit_account = session.get(AccountModel, credit_account_id)
+    if category == "OPENING_BALANCE":
+        kind = TransactionKind.OPENING_BALANCE
+        impact = debit_account
+    elif category in {"INTERNAL_TRANSFER", "SAVINGS", "WEALTH"}:
+        kind = TransactionKind.TRANSFER
+        impact = credit_account
+    else:
+        kind = TransactionKind.EXPENSE
+        impact = credit_account
+    owner_id = (
+        impact.user_id
+        if impact is not None and impact.user_id is not None
+        else debit_account.user_id
+        if debit_account is not None
+        else credit_account.user_id
+        if credit_account is not None
+        else None
+    )
     transaction_id = stable_id(f"transaction:{key}")
     add_once(
         session,
         TransactionModel(
             id=transaction_id,
+            user_id=owner_id,
+            account_id=impact.id if impact is not None else None,
             reference=f"DEMO-{key.upper()}",
             status=TransactionStatus.COMPLETED,
+            kind=kind,
+            origin=TransactionOrigin.BANK,
             amount=amount,
             currency=Currency.CNY,
             description=description,
+            merchant=description if kind == TransactionKind.EXPENSE else None,
             category=category,
             category_source="RULE",
             category_version="seed-v1",

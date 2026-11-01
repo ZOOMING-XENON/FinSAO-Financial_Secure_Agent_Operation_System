@@ -10,6 +10,8 @@ from banking_core.app.domain.enums import (
     AccountStatus,
     CardStatus,
     RiskTier,
+    TransactionKind,
+    TransactionOrigin,
     TransactionStatus,
     WealthOrderType,
 )
@@ -437,8 +439,12 @@ class WealthService:
                 description = "Mock wealth redemption"
             transaction = TransactionModel(
                 id=uuid4(),
+                user_id=user_id,
+                account_id=source.id,
                 reference=f"WLT-{order.id}",
                 status=TransactionStatus.COMPLETED,
+                kind=TransactionKind.TRANSFER,
+                origin=TransactionOrigin.BANK,
                 amount=order.amount,
                 currency=order.currency,
                 description=description,

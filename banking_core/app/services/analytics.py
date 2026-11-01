@@ -9,12 +9,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from banking_core.app.domain.enums import Currency
+from banking_core.app.domain.enums import Currency, TransactionKind, TransactionStatus
 from banking_core.app.persistence.models import (
-    AccountModel,
     AuditEventModel,
     BudgetModel,
-    LedgerEntryModel,
     RenewalReminderModel,
     SubscriptionModel,
     TransactionModel,
@@ -59,37 +57,41 @@ class BillAnalysisService:
     def monthly_summary(self, user_id: UUID, year: int, month: int) -> SpendingSummary:
         start = datetime(year, month, 1, tzinfo=BUSINESS_TZ)
         end = datetime(year + (month == 12), month % 12 + 1, 1, tzinfo=BUSINESS_TZ)
-        rows = self.session.execute(
-            select(TransactionModel, LedgerEntryModel.credit)
-            .join(LedgerEntryModel, LedgerEntryModel.transaction_id == TransactionModel.id)
-            .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
-            .where(
-                AccountModel.user_id == user_id,
-                LedgerEntryModel.credit > 0,
+        rows = self.session.scalars(
+            select(TransactionModel).where(
+                TransactionModel.user_id == user_id,
+                TransactionModel.kind == TransactionKind.EXPENSE,
+                TransactionModel.status == TransactionStatus.COMPLETED,
+                TransactionModel.deleted_at.is_(None),
                 TransactionModel.posted_at >= start.astimezone(UTC),
                 TransactionModel.posted_at < end.astimezone(UTC),
             )
-        ).all()
+        )
         categories: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
         merchants: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
         total = Decimal("0.00")
-        for transaction, amount in rows:
-            category = transaction.category or categorize(transaction.description)
+        for transaction in rows:
+            category = transaction.category or categorize(
+                transaction.merchant or transaction.description
+            )
             if category in EXCLUDED_SPENDING_CATEGORIES:
                 continue
+            amount = transaction.amount
             total += amount
             categories[category] += amount
-            merchants[transaction.description] += amount
+            merchants[transaction.merchant or transaction.description] += amount
         return SpendingSummary(total, dict(categories), dict(merchants))
 
     def correct_category(
         self, transaction_id: UUID, user_id: UUID, category: str
     ) -> TransactionModel:
         transaction = self.session.scalar(
-            select(TransactionModel)
-            .join(LedgerEntryModel, LedgerEntryModel.transaction_id == TransactionModel.id)
-            .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
-            .where(TransactionModel.id == transaction_id, AccountModel.user_id == user_id)
+            select(TransactionModel).where(
+                TransactionModel.id == transaction_id,
+                TransactionModel.user_id == user_id,
+                TransactionModel.kind == TransactionKind.EXPENSE,
+                TransactionModel.deleted_at.is_(None),
+            )
         )
         if transaction is None:
             raise NotFoundError("transaction not found")
@@ -207,9 +209,12 @@ class SubscriptionService:
                 TransactionModel.amount,
                 TransactionModel.posted_at,
             )
-            .join(LedgerEntryModel, LedgerEntryModel.transaction_id == TransactionModel.id)
-            .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
-            .where(AccountModel.user_id == user_id, LedgerEntryModel.credit > 0)
+            .where(
+                TransactionModel.user_id == user_id,
+                TransactionModel.kind == TransactionKind.EXPENSE,
+                TransactionModel.status == TransactionStatus.COMPLETED,
+                TransactionModel.deleted_at.is_(None),
+            )
             .order_by(TransactionModel.description, TransactionModel.posted_at)
         ).all()
         groups: defaultdict[str, builtins.list[tuple[UUID, Decimal, datetime]]] = defaultdict(list)

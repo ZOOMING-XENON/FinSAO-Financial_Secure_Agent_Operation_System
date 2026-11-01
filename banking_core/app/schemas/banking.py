@@ -5,7 +5,15 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from banking_core.app.domain.enums import AccountStatus, Currency, TransactionStatus, TransferStatus
+from banking_core.app.domain.enums import (
+    AccountStatus,
+    Currency,
+    TransactionDirection,
+    TransactionKind,
+    TransactionOrigin,
+    TransactionStatus,
+    TransferStatus,
+)
 from banking_core.app.domain.money import MoneyDecimal
 
 
@@ -31,10 +39,16 @@ class TransactionResponse(ApiModel):
     id: UUID
     reference: str
     status: TransactionStatus
+    kind: TransactionKind = TransactionKind.EXPENSE
+    origin: TransactionOrigin = TransactionOrigin.BANK
+    direction: TransactionDirection | None = None
+    account_id: UUID | None = None
     amount: Decimal
     currency: Currency
     description: str
+    merchant: str | None = None
     category: str | None
+    category_source: str | None = None
     posted_at: datetime | None
 
 
@@ -42,6 +56,25 @@ class TransactionPage(ApiModel):
     items: list[TransactionResponse]
     limit: int
     offset: int
+
+
+class ExpenseCreateRequest(BaseModel):
+    amount: MoneyDecimal = Field(gt=0, max_digits=18, decimal_places=2)
+    currency: Currency
+    merchant: str = Field(min_length=1, max_length=120)
+    category: str | None = Field(default=None, max_length=80)
+    occurred_at: datetime | None = None
+    account_id: UUID | None = None
+    origin: TransactionOrigin = TransactionOrigin.MANUAL
+
+
+class ExpenseUpdateRequest(BaseModel):
+    amount: MoneyDecimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
+    currency: Currency | None = None
+    merchant: str | None = Field(default=None, min_length=1, max_length=120)
+    category: str | None = Field(default=None, max_length=80)
+    occurred_at: datetime | None = None
+    account_id: UUID | None = None
 
 
 class BeneficiaryResponse(ApiModel):
