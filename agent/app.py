@@ -12,7 +12,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -33,6 +33,7 @@ from agent.factory import build_model_provider
 from agent.graph import build_runtime_agent_graph
 from agent.hybrid import HybridPlanner, HybridRouter
 from agent.jev_http import HttpJevAdapter
+from agent.multimedia import MultimediaProvider, MultimediaSettings, MultimediaUnavailable
 from agent.planning import BaselinePlanner, PlanVerifier
 from agent.privacy_broker import PrivacyBroker
 from agent.proactive import (
@@ -58,6 +59,33 @@ _banking_client = BankingHttpClient(
 _registry = ToolRegistry()
 register_default_tools(_registry, _banking_client)
 _model_provider = build_model_provider(_settings)
+_multimedia_vision_api_key = (
+    _settings.multimedia_vision_api_key or _settings.deepseek_api_key
+)
+_multimedia = MultimediaProvider(
+    MultimediaSettings(
+        enabled=_settings.multimedia_enabled,
+        vision_base_url=_settings.multimedia_vision_base_url
+        or (_settings.deepseek_base_url if _settings.model_provider == "deepseek" else None),
+        vision_api_key=(
+            _multimedia_vision_api_key.get_secret_value()
+            if _multimedia_vision_api_key is not None
+            else None
+        ),
+        vision_model=_settings.multimedia_vision_model
+        or (_settings.deepseek_model if _settings.model_provider == "deepseek" else None),
+        speech_base_url=_settings.multimedia_speech_base_url,
+        speech_api_key=(
+            _settings.multimedia_speech_api_key.get_secret_value()
+            if _settings.multimedia_speech_api_key
+            else None
+        ),
+        speech_model=_settings.multimedia_speech_model,
+        max_upload_bytes=_settings.multimedia_max_upload_bytes,
+        vision_enabled=_settings.multimedia_vision_enabled,
+        speech_enabled=_settings.multimedia_speech_enabled,
+    )
+)
 _jev_adapter = (
     HttpJevAdapter(
         api_key=_settings.jev_api_key.get_secret_value(),
@@ -135,9 +163,46 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             await _model_provider.close()
         if _jev_adapter is not None:
             await _jev_adapter.close()
+        await _multimedia.close()
 
 
 app = FastAPI(title="FinPilot Agent API", version="0.1.0", lifespan=lifespan)
+
+
+def _validate_upload(
+    upload: UploadFile,
+    content: bytes,
+    allowed: set[str],
+    kind: str,
+) -> None:
+    if upload.content_type not in allowed:
+        raise HTTPException(status_code=415, detail={"code": "UNSUPPORTED_MEDIA_TYPE"})
+    if not content:
+        raise HTTPException(status_code=400, detail={"code": "EMPTY_UPLOAD"})
+    if len(content) > _settings.multimedia_max_upload_bytes:
+        raise HTTPException(status_code=413, detail={"code": "UPLOAD_TOO_LARGE"})
+    if not _valid_signature(content, kind):
+        raise HTTPException(status_code=415, detail={"code": "INVALID_MEDIA"})
+
+
+def _valid_signature(content: bytes, kind: str) -> bool:
+    if kind == "image":
+        return (
+            content.startswith(b"\xff\xd8\xff")
+            or content.startswith(b"\x89PNG\r\n\x1a\n")
+            or (content.startswith(b"RIFF") and content[8:12] == b"WEBP")
+            or (content[4:8] == b"ftyp")
+        )
+    if kind == "audio":
+        return (
+            content.startswith(b"\x1aE\xdf\xa3")
+            or (content.startswith(b"RIFF") and content[8:12] == b"WAVE")
+            or content.startswith(b"ID3")
+            or content[:2] in {b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"}
+            or content[4:8] == b"ftyp"
+            or content.startswith(b"OggS")
+        )
+    return False
 
 
 def get_agent_service() -> AgentService:
@@ -173,6 +238,65 @@ def get_trusted_user_id(
             detail={"code": "AUTHENTICATION_REQUIRED", "message": "valid API token required"},
         )
     return settings.agent_development_user_id
+
+
+@app.post("/agent/receipts/parse")
+async def parse_receipt(
+    user_id: Annotated[UUID, Depends(get_trusted_user_id)],
+    upload: UploadFile = File(...),  # noqa: B008
+) -> dict[str, object]:
+    del user_id
+    content = await upload.read(_settings.multimedia_max_upload_bytes + 1)
+    _validate_upload(
+        upload,
+        content,
+        {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic"},
+        "image",
+    )
+    try:
+        result = await _multimedia.extract_receipt(content, upload.content_type or "image/jpeg")
+    except MultimediaUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "MULTIMEDIA_UNAVAILABLE", "message": str(exc)},
+        ) from None
+    return result.model_dump(mode="json")
+
+
+@app.post("/agent/audio/transcribe")
+async def transcribe_audio(
+    user_id: Annotated[UUID, Depends(get_trusted_user_id)],
+    upload: UploadFile = File(...),  # noqa: B008
+) -> dict[str, object]:
+    del user_id
+    content = await upload.read(_settings.multimedia_max_upload_bytes + 1)
+    _validate_upload(
+        upload,
+        content,
+        {
+            "audio/webm",
+            "audio/wav",
+            "audio/x-wav",
+            "audio/mpeg",
+            "audio/mp3",
+            "audio/mp4",
+            "audio/ogg",
+            "audio/x-m4a",
+        },
+        "audio",
+    )
+    try:
+        result = await _multimedia.transcribe(
+            content,
+            upload.filename or "voice.webm",
+            upload.content_type or "audio/webm",
+        )
+    except MultimediaUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "MULTIMEDIA_UNAVAILABLE", "message": str(exc)},
+        ) from None
+    return result.model_dump(mode="json")
 
 
 @app.post("/agent/requests", response_model=AgentResponse)

@@ -53,6 +53,27 @@ _TRAILING = re.compile(
     r"今天|昨天|今晚|今早|昨晚)$",
     re.IGNORECASE,
 )
+_NON_MERCHANT = {
+    "i",
+    "me",
+    "spent",
+    "spend",
+    "paid",
+    "pay",
+    "bought",
+    "buy",
+    "charged",
+    "cost",
+    "got paid",
+    "received",
+    "我",
+    "花了",
+    "我花了",
+    "消费",
+    "支付",
+    "买了",
+    "我买了",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +84,7 @@ class ExpenseCapture:
     occurred_at: datetime
     category: str | None
     origin: str
+    ambiguous: bool = False
 
 
 def _normalize(text: str) -> str:
@@ -89,6 +111,8 @@ def _clean_merchant(value: str | None) -> str | None:
         r"\s+(?:cost|cost me|was|for|at|on|from)$", "", candidate, flags=re.I
     ).strip()
     if not candidate or _AMOUNT.fullmatch(candidate):
+        return None
+    if candidate.casefold() in _NON_MERCHANT:
         return None
     return candidate[:120]
 
@@ -123,14 +147,22 @@ def parse_expense(text: str, *, now: datetime) -> ExpenseCapture:
     normalized = _normalize(text)
     amount, currency, start, end = _amount(normalized)
     merchant: str | None = None
-    after = normalized[end:].strip()
-    after_match = _MERCHANT_AFTER.match(after)
-    if after_match is not None:
-        merchant = _clean_merchant(after_match.group(1))
-    if merchant is None:
-        before = normalized[:start].strip()
-        if before:
-            merchant = _clean_merchant(before)
+    if amount is None:
+        marker = re.search(
+            r"(?:on|for|at|from|买|买了|在)\s*(.+)$", normalized, re.IGNORECASE
+        )
+        merchant = _clean_merchant(
+            marker.group(1) if marker is not None else normalized
+        )
+    else:
+        after = normalized[end:].strip()
+        after_match = _MERCHANT_AFTER.match(after)
+        if after_match is not None:
+            merchant = _clean_merchant(after_match.group(1))
+        if merchant is None:
+            before = normalized[:start].strip()
+            if before:
+                merchant = _clean_merchant(before)
     occurred_at = now
     lowered = normalized.casefold()
     if any(word in lowered for word in ("yesterday", "昨天")):
@@ -139,12 +171,20 @@ def parse_expense(text: str, *, now: datetime) -> ExpenseCapture:
         occurred_at = (now - timedelta(days=1)).replace(hour=20, minute=0, second=0, microsecond=0)
     elif any(word in lowered for word in ("this morning", "今早")):
         occurred_at = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    ambiguous = bool(
+        merchant
+        and (
+            re.search(r"\band\b|、|以及|和", merchant, re.IGNORECASE)
+            or len(_AMOUNT.findall(normalized)) > 1
+        )
+    )
     amount_text = format(amount.quantize(Decimal("0.01")), "f") if amount is not None else None
     return ExpenseCapture(
         amount=amount_text,
         currency=currency or ("CNY" if amount is not None else None),
-        merchant=merchant,
+        merchant=None if ambiguous else merchant,
         occurred_at=occurred_at,
-        category=categorize_merchant(merchant) if merchant else None,
+        category=categorize_merchant(merchant) if merchant and not ambiguous else None,
         origin="CASH",
+        ambiguous=ambiguous,
     )

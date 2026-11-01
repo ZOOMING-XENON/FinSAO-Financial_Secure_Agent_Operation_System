@@ -164,6 +164,16 @@ class Client {
     return this.agentPost<AgentTask>(`/agent/tasks/${taskId}/resume`, { authorization_reference: authorizationRef });
   }
 
+  async parseReceipt(file: File): Promise<{
+    items: Array<{ merchant: string; amount: string | null; currency: string; date: string | null; category: string }>;
+  }> {
+    return this.agentMultipart('/agent/receipts/parse', file);
+  }
+
+  async transcribeAudio(file: Blob, filename = 'voice.webm'): Promise<{ text: string; language: string | null }> {
+    return this.agentMultipart('/agent/audio/transcribe', new File([file], filename, { type: file.type || 'audio/webm' }));
+  }
+
   private async agentPost<T>(path: string, body: unknown): Promise<T> {
     const traceId = uid();
     const ctrl = new AbortController();
@@ -184,6 +194,44 @@ class Client {
     } finally {
       clearTimeout(timer);
       this.record({ at: new Date().toISOString(), method: 'POST', path: '/api' + path, status, traceId, request: scrub(body), response: scrub(data) });
+    }
+    if (status >= 400) {
+      const d = data as { code?: string; message?: string; detail?: { code?: string; message?: string } } | null;
+      throw new ApiError(status, d?.detail?.code || d?.code || 'AGENT_ERROR', d?.detail?.message || d?.message);
+    }
+    return data as T;
+  }
+
+  private async agentMultipart<T>(path: string, file: File): Promise<T> {
+    const traceId = uid();
+    const form = new FormData();
+    form.append('upload', file, file.name);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 45000);
+    let status = 0;
+    let data: unknown = null;
+    try {
+      const res = await fetch(`${BASE}/api${path}`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'X-Trace-Id': traceId },
+        body: form,
+        signal: ctrl.signal,
+      });
+      status = res.status;
+      data = await res.json().catch(() => null);
+    } catch {
+      throw new ApiError(0, 'AGENT_UNAVAILABLE');
+    } finally {
+      clearTimeout(timer);
+      this.record({
+        at: new Date().toISOString(),
+        method: 'POST',
+        path: '/api' + path,
+        status,
+        traceId,
+        request: { file: file.name, type: file.type, size: file.size },
+        response: scrub(data),
+      });
     }
     if (status >= 400) {
       const d = data as { code?: string; message?: string; detail?: { code?: string; message?: string } } | null;

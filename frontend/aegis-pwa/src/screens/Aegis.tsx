@@ -78,6 +78,7 @@ export function Aegis() {
   const level = useRef<OrbLevel>({ current: 0 }).current;
   const stopMic = useRef<() => void>(() => undefined);
   const heard = useRef('');
+  const backendStop = useRef<(() => Promise<Blob>) | null>(null);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [voiceText, setVoiceText] = useState('');
   const [voiceError, setVoiceError] = useState('');
@@ -282,6 +283,30 @@ export function Aegis() {
     return t('aegis.noSpeech');
   };
 
+  const startBackendVoice = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      throw new Error('recording unavailable');
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const recorder = new MediaRecorder(stream);
+    const chunks: BlobPart[] = [];
+    const recorded = new Promise<Blob>(resolve => {
+      recorder.ondataavailable = event => {
+        if (event.data.size) chunks.push(event.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach(track => track.stop());
+        resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
+      };
+    });
+    recorder.start();
+    backendStop.current = () => {
+      if (recorder.state !== 'inactive') recorder.stop();
+      return recorded;
+    };
+    setListening(true);
+  };
+
   const startVoiceCapture = async (captureLang = voiceLang) => {
     const id = ++captureId.current;
     const previous = recRef.current;
@@ -310,6 +335,18 @@ export function Aegis() {
     const w = window as unknown as Record<string, unknown>;
     const Rec = (w.SpeechRecognition || w.webkitSpeechRecognition) as (new () => SpeechRec) | undefined;
     if (!Rec) {
+      if (import.meta.env.VITE_MULTIMEDIA_BACKEND === 'true' && api.agent === 'live') {
+        try {
+          await startBackendVoice();
+          return;
+        } catch {
+          stopMic.current();
+          stopMic.current = () => undefined;
+          setListening(false);
+          setVoiceError(t('aegis.micUnavailable'));
+          return;
+        }
+      }
       stopMic.current();
       stopMic.current = () => undefined;
       setListening(false);
@@ -336,7 +373,7 @@ export function Aegis() {
     rec.onend = () => {
       if (id !== captureId.current) return;
       setListening(false);
-      if (heard.current.trim()) closeVoice(true);
+      if (heard.current.trim()) void closeVoice(true);
       else if (!recognitionFailed.current) {
         stopMic.current();
         stopMic.current = () => undefined;
@@ -356,26 +393,51 @@ export function Aegis() {
   };
 
   // Voice mode: full-screen orb that reacts to the mic; what you say is sent when you stop.
-  const closeVoice = (sendIt: boolean) => {
+  const closeVoice = async (sendIt: boolean) => {
     captureId.current += 1;
     const rec = recRef.current;
     recRef.current = null;
     rec?.stop();
     stopMic.current();
     stopMic.current = () => undefined;
+    const stopBackend = backendStop.current;
+    backendStop.current = null;
     setListening(false);
     setVoiceOpen(false);
     setVoiceError('');
-    const said = heard.current.trim();
+    let said = heard.current.trim();
+    if (stopBackend) {
+      if (sendIt) {
+        try {
+          const blob = await stopBackend();
+          if (!blob.size) throw new Error('empty recording');
+          const result = await api.transcribeAudio(blob);
+          said = result.text.trim();
+          heard.current = said;
+          setVoiceText(said);
+        } catch {
+          setVoiceError(t('aegis.voiceNetwork'));
+          push({ role: 'bot', body: t('aegis.voiceNetwork') });
+          return;
+        }
+      } else {
+        void stopBackend();
+      }
+    }
     heard.current = '';
     setVoiceText('');
-    if (sendIt && said) send(said);
+    if (sendIt && said) void send(said);
+    else if (sendIt) push({ role: 'bot', body: t('aegis.noSpeech') });
   };
   const toggleVoice = async () => {
-    if (voiceOpen) return closeVoice(true);
+    if (voiceOpen) return void closeVoice(true);
     const w = window as unknown as Record<string, unknown>;
     const Rec = (w.SpeechRecognition || w.webkitSpeechRecognition) as (new () => SpeechRec) | undefined;
-    if (!Rec) {
+    if (!Rec && import.meta.env.VITE_MULTIMEDIA_BACKEND !== 'true') {
+      push({ role: 'bot', body: t('aegis.noVoice') });
+      return;
+    }
+    if (!Rec && api.agent !== 'live') {
       push({ role: 'bot', body: t('aegis.noVoice') });
       return;
     }
@@ -446,13 +508,13 @@ export function Aegis() {
       </form>
       {voiceOpen && (
         <div className="voice-mode" role="dialog" aria-modal="true" aria-label={t('aegis.listen')}>
-          <button className="icon-btn glass vm-close" onClick={() => closeVoice(false)} aria-label={t('common.close')}>
+          <button className="icon-btn glass vm-close" onClick={() => void closeVoice(false)} aria-label={t('common.close')}>
             <Icon name="i-x" />
           </button>
           <button className="vm-lang" onClick={switchVoiceLang}>{voiceLang === 'zh-CN' ? '中文' : 'English'}</button>
           <button
             className="vm-orb"
-            onClick={() => (listening || voiceText.trim() ? closeVoice(true) : void startVoiceCapture())}
+            onClick={() => (listening || voiceText.trim() ? void closeVoice(true) : void startVoiceCapture())}
             aria-label={t(listening || voiceText.trim() ? 'aegis.tapToSend' : 'aegis.retryVoice')}
           >
             <VoiceOrb size={280} level={level} active />
@@ -461,7 +523,7 @@ export function Aegis() {
             {voiceError || (listening ? t('aegis.listen') : t('aegis.paused'))}
           </p>
           <p className="vm-text">{voiceText || (voiceError ? t('aegis.voiceRecover') : t('aegis.voiceHint'))}</p>
-          <button className="btn vm-send" onClick={() => (voiceText.trim() ? closeVoice(true) : void startVoiceCapture())} disabled={listening && !voiceText.trim()}>
+          <button className="btn vm-send" onClick={() => (voiceText.trim() ? void closeVoice(true) : void startVoiceCapture())} disabled={listening && !voiceText.trim()}>
             <Icon name={voiceText.trim() ? 'i-send' : 'i-mic'} />
             {t(voiceText.trim() ? 'aegis.tapToSend' : 'aegis.retryVoice')}
           </button>

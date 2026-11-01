@@ -14,6 +14,7 @@ dependencies = [
   "httpx>=0.27,<1",
   "langgraph==1.2.17",
   "langgraph-checkpoint-postgres==3.2.0",
+  "python-multipart>=0.0.9,<1",
   "psycopg[binary]>=3.2,<4",
   "pydantic>=2.9,<3",
   "pydantic-settings>=2.5,<3",
@@ -72,4 +73,3 @@ module = [
 ]
 follow_imports = "skip"
 ignore_errors = true
-

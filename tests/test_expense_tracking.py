@@ -248,3 +248,137 @@ def test_expense_delete_and_update_intents() -> None:
     update = ExpenseRouter(RuleRouter(), enabled=True).route("change the coke expense to 6")
     assert delete.intent == Intent.DELETE_EXPENSE
     assert update.intent == Intent.UPDATE_EXPENSE
+
+
+class LookupGateway:
+    def __init__(self, expense_id: object) -> None:
+        self.expense_id = expense_id
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def execute(
+        self, *, tool_name: str, arguments: dict[str, Any], context: ExecutionContext
+    ) -> ToolResult[Any]:
+        del context
+        self.calls.append((tool_name, arguments))
+        if tool_name == "get_expenses":
+            return ToolResult(
+                status=ToolResultStatus.SUCCESS,
+                data=FixtureOutput(items=[{"id": str(self.expense_id)}]),
+            )
+        return ToolResult(status=ToolResultStatus.SUCCESS, data=FixtureOutput())
+
+
+@pytest.mark.asyncio
+async def test_expense_reference_resolves_by_merchant() -> None:
+    registry = ToolRegistry()
+    register_default_tools(registry, Mock())
+    expense_id = uuid4()
+    gateway = LookupGateway(expense_id)
+    agent = AgentService(
+        router=ExpenseRouter(RuleRouter(), enabled=True),
+        slots=SlotTracker(),
+        planner=BaselinePlanner(),
+        verifier=PlanVerifier(registry),
+        capabilities=CapabilityBroker(registry),
+        gateway=gateway,
+    )
+    response = await agent.handle(
+        AgentRequest(session_id=uuid4(), message="delete the coke expense"),
+        context(),
+    )
+    assert response.status == AgentResponseStatus.COMPLETED
+    assert [name for name, _ in gateway.calls] == ["get_expenses", "delete_expense"]
+    assert gateway.calls[1][1]["expense_id"] == str(expense_id)
+
+
+@pytest.mark.asyncio
+async def test_expense_clarification_form_records_optional_category() -> None:
+    from agent.contracts import ClarificationConfirmation
+
+    agent, gateway = service()
+    response = await agent.handle(
+        AgentRequest(
+            session_id=uuid4(),
+            message="I spent 5 dollars",
+        ),
+        context(),
+    )
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    confirmed = await agent.handle(
+        AgentRequest(
+            session_id=uuid4(),
+            message="confirm",
+            confirmation=ClarificationConfirmation(
+                intent=Intent.RECORD_EXPENSE,
+                fields={
+                    "amount": "5.00",
+                    "currency": "USD",
+                    "merchant": "coke",
+                    "category": "GROCERIES",
+                },
+            ),
+        ),
+        context(),
+    )
+    assert confirmed.status == AgentResponseStatus.COMPLETED
+    assert gateway.calls[0][0] == "record_expense"
+    assert gateway.calls[0][1]["category"] == "GROCERIES"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_expense_asks_for_merchant() -> None:
+    agent, gateway = service()
+    response = await agent.handle(
+        AgentRequest(session_id=uuid4(), message="I spent 5 dollars", locale="en-US"),
+        context(),
+    )
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert "merchant" in response.message.lower()
+    assert response.result is not None
+    clarification = response.result["clarification"]
+    fields = {field["name"]: field for field in clarification["fields"]}
+    assert fields["merchant"]["required"] is True
+    assert fields["merchant"]["value"] is None
+    assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_spend_without_amount_asks_for_amount() -> None:
+    agent, gateway = service()
+    response = await agent.handle(
+        AgentRequest(session_id=uuid4(), message="I spent on coke", locale="en-US"),
+        context(),
+    )
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert "amount" in response.message.lower()
+    clarification = response.result["clarification"]
+    fields = {field["name"]: field for field in clarification["fields"]}
+    assert fields["merchant"]["value"] == "coke"
+    assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_multiple_merchants_ask_for_one_entry() -> None:
+    agent, gateway = service()
+    response = await agent.handle(
+        AgentRequest(
+            session_id=uuid4(),
+            message="I spent 5 dollars on coke and a taxi",
+            locale="en-US",
+        ),
+        context(),
+    )
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert "more than one" in response.message.lower()
+    assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_income_is_not_silently_recorded_as_expense() -> None:
+    agent, gateway = service()
+    response = await agent.handle(
+        AgentRequest(session_id=uuid4(), message="I got paid 5000", locale="en-US"),
+        context(),
+    )
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert gateway.calls == []

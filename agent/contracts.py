@@ -59,7 +59,27 @@ class ClarificationConfirmation(StrictContract):
         required = set(REQUIRED_SLOTS_BY_INTENT.get(self.intent, ()))
         if not required:
             raise ValueError("intent does not accept a clarification confirmation")
-        optional = {"include_balance"} if self.intent == Intent.TRANSFER else set()
+        optional = (
+            {"include_balance"}
+            if self.intent == Intent.TRANSFER
+            else {
+                "category",
+                "occurred_at",
+                "account_id",
+                "origin",
+            }
+            if self.intent == Intent.RECORD_EXPENSE
+            else {
+                "amount",
+                "currency",
+                "merchant",
+                "category",
+                "occurred_at",
+                "account_id",
+            }
+            if self.intent == Intent.UPDATE_EXPENSE
+            else set()
+        )
         present = set(self.fields)
         forbidden = {
             "user_id",

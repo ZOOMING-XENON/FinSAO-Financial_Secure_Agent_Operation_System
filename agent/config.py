@@ -37,6 +37,16 @@ class AgentSettings(BaseSettings):
     agent_routing_mode: Literal["hybrid", "llm_only"] = "hybrid"
     model_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     model_max_retries: int = Field(default=2, ge=0, le=5)
+    multimedia_enabled: bool = False
+    multimedia_vision_enabled: bool = True
+    multimedia_speech_enabled: bool = True
+    multimedia_max_upload_bytes: int = Field(default=10_000_000, ge=1_000, le=50_000_000)
+    multimedia_vision_base_url: str | None = None
+    multimedia_vision_api_key: SecretStr | None = None
+    multimedia_vision_model: str | None = None
+    multimedia_speech_base_url: str | None = None
+    multimedia_speech_api_key: SecretStr | None = None
+    multimedia_speech_model: str | None = None
 
     deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
