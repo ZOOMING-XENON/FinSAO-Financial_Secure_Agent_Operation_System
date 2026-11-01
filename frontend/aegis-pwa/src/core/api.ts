@@ -31,7 +31,7 @@ const BASE: string = (import.meta.env.VITE_API_BASE as string | undefined) ?? ''
 const SECRET_KEYS = new Set(['authorization_ref', 'authorization_reference', 'code']);
 
 export const uid = (): string =>
-  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : 'xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx'.replace(/x/g, () => ((Math.random() * 16) | 0).toString(16));
 

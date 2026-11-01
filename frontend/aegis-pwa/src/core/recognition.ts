@@ -4,7 +4,7 @@
 import type { Worker } from 'tesseract.js';
 import type { Category, Money } from './types';
 import { CATEGORIES } from './types';
-import { parseReceipt } from './receipt';
+import { parseReceipts } from './receipt';
 
 export interface ReceiptGuess {
   merchant: string;
@@ -12,7 +12,7 @@ export interface ReceiptGuess {
   currency: string;
   category: Category;
   date: string | null;
-  text: string;
+  kind: 'out' | 'in';
 }
 
 let workerP: Promise<Worker> | null = null;
@@ -40,29 +40,71 @@ function getWorker(): Promise<Worker> {
   return workerP;
 }
 
-export async function recognizeReceipt(file: File, progress?: (p: number) => void): Promise<ReceiptGuess> {
-  onProgress = progress ?? null;
-  const worker = await getWorker();
-  const { data } = await worker.recognize(file);
-  onProgress = null;
-  const parsed = parseReceipt(data.text);
-  return {
-    merchant: parsed.merchant,
-    amount: parsed.amount,
-    currency: 'CNY',
-    category: (CATEGORIES as readonly string[]).includes(parsed.category) ? (parsed.category as Category) : 'UNKNOWN',
-    date: parsed.date,
-    text: data.text,
-  };
+/**
+ * Makes faint text readable before OCR: grey, and darkened with a curve so light-grey dates and
+ * category labels in payment-app screenshots come out nearly black while white stays white.
+ * Small pictures are enlarged; very large photos are shrunk to keep it quick on a phone.
+ */
+async function prepare(file: File): Promise<Blob | File> {
+  try {
+    const bmp = await createImageBitmap(file);
+    const long = Math.max(bmp.width, bmp.height);
+    const scale = long < 1400 ? 1400 / long : long > 2600 ? 2600 / long : 1;
+    const w = Math.round(bmp.width * scale);
+    const h = Math.round(bmp.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return file;
+    ctx.drawImage(bmp, 0, 0, w, h);
+    bmp.close();
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+    // Dark-background screenshots (dark mode) are flipped so text is dark on light.
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 64) sum += d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    const dark = sum / (d.length / 64) < 110;
+    for (let i = 0; i < d.length; i += 4) {
+      let l = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255;
+      if (dark) l = 1 - l;
+      const v = Math.round(255 * l ** 2.2);
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+    ctx.putImageData(img, 0, 0);
+    return await new Promise<Blob | File>(resolve => canvas.toBlob(b => resolve(b ?? file), 'image/png'));
+  } catch {
+    return file;
+  }
 }
 
-/** A photo picked on Home is handed to the scan screen through here. */
-let pendingFile: File | null = null;
-export function setPendingReceipt(file: File) {
-  pendingFile = file;
+/** Reads one picture; a bill-list screenshot can hold several payments. */
+export async function recognizeReceipt(file: File, progress?: (p: number) => void): Promise<ReceiptGuess[]> {
+  onProgress = progress ?? null;
+  try {
+    const worker = await getWorker();
+    const { data } = await worker.recognize(await prepare(file));
+    if (import.meta.env.DEV) console.debug('[receipt OCR]', data.text);
+    return parseReceipts(data.text).map(r => ({
+      merchant: r.merchant,
+      amount: r.amount,
+      currency: 'CNY',
+      category: (CATEGORIES as readonly string[]).includes(r.category) ? (r.category as Category) : 'UNKNOWN',
+      date: r.date,
+      kind: r.kind,
+    }));
+  } finally {
+    onProgress = null;
+  }
 }
-export function takePendingReceipt(): File | null {
-  const f = pendingFile;
-  pendingFile = null;
+
+/** Photos picked on Home are handed to the scan screen through here. */
+let pendingFiles: File[] = [];
+export function setPendingReceipts(files: File[]) {
+  pendingFiles = files;
+}
+export function takePendingReceipts(): File[] {
+  const f = pendingFiles;
+  pendingFiles = [];
   return f;
 }

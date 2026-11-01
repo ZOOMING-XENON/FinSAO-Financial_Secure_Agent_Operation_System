@@ -1,5 +1,5 @@
 import type { Transaction } from '../core/types';
-import { categoryKey, direction, formatDate } from '../core/format';
+import { categoryKey, direction, formatDate, txTitle } from '../core/format';
 import { useApp } from '../app/state';
 import { Amount, Icon } from './kit';
 
@@ -16,9 +16,10 @@ export function TxRow({ tx }: { tx: Transaction }) {
       </span>
       <span className="main">
         <span className="t" style={{ display: 'block' }}>
-          {tx.description}
+          {txTitle(tx, t)}
         </span>
         <span className="s" style={{ display: 'block' }}>
+          {tx.cash ? `${t('tx.cash')} · ` : ''}
           {label} · {formatDate(tx.posted_at, locale)}
           {tx.status !== 'COMPLETED' ? ` · ${tx.status}` : ''}
         </span>

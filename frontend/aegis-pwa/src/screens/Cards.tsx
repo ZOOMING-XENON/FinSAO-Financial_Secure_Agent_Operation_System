@@ -3,7 +3,7 @@ import { api } from '../core/api';
 import type { Card } from '../core/types';
 import { currentMonth, summarize } from '../core/insights';
 import { formatMoney, fromCents, toCents } from '../core/money';
-import { PROFILE } from '../core/people';
+import { getProfile } from '../core/profile';
 import { go, useApp, useLoad } from '../app/state';
 import { useShield } from '../ui/Shield';
 import { BankCard, type CardFinish } from '../ui/BankCard';
@@ -48,7 +48,8 @@ export function Cards() {
   const finishes: CardFinish[] = ['purple', 'white'];
   const slides: Slide[] = [
     ...cards.map(c => ({ key: c.id, finish: 'black' as const, kind: t('cards.debit'), last4: c.last_four, card: c, account: accounts.find(a => a.id === c.account_id) })),
-    ...accounts.map((a, i) => ({ key: a.id, finish: finishes[i % finishes.length], kind: a.name, last4: a.account_number.slice(-4), account: a })),
+    // An account that already has a debit card (Checking) would just repeat that card.
+    ...accounts.filter(a => !cards.some(c => c.account_id === a.id)).map((a, i) => ({ key: a.id, finish: finishes[i % finishes.length], kind: a.name, last4: a.account_number.slice(-4), account: a })),
   ];
   const cur = slides[Math.min(idx, slides.length - 1)];
   const card = cur?.card;
@@ -121,7 +122,7 @@ export function Cards() {
             finish={s.finish}
             kind={s.kind}
             last4={s.last4}
-            holder={PROFILE.name}
+            holder={getProfile().name}
             holderLabel={t('cards.holder')}
             balance={s.account?.balance}
             balanceLabel={t('cards.available')}
@@ -235,7 +236,7 @@ export function Cards() {
         <div className="card" style={{ background: 'var(--surface-2)', boxShadow: 'none', marginTop: 10 }}>
           <div className="kv">
             <span>{t('cards.holder')}</span>
-            <span>{PROFILE.name}</span>
+            <span>{getProfile().name}</span>
           </div>
           <div className="kv">
             <span>{card ? t('cards.number') : t('pay.accountNumber')}</span>

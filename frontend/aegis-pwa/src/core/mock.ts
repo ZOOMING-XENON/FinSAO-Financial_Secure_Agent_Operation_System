@@ -10,7 +10,11 @@ type Json = Record<string, unknown>;
 type Result = [number, unknown];
 
 const U = (n: number) => '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
-const rid = () => crypto.randomUUID();
+// crypto.randomUUID only exists on https/localhost; phones opening http://192.168.x.x need the fallback.
+const rid = () =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx'.replace(/x/g, () => ((Math.random() * 16) | 0).toString(16));
 const now = () => new Date().toISOString();
 const err = (status: number, code: string, message = code): Result => [status, { code, message }];
 

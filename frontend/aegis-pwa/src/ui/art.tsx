@@ -1,14 +1,39 @@
-// Contact avatars drawn in code: a photo when one is listed, otherwise a flat illustrated portrait.
+// Avatars: contacts get an illustrated portrait on a flat app-colour circle; the signed-in
+// person gets their photo, or initials / an icon on a flat circle.
 import { useState } from 'react';
 import { hashIndex } from '../core/format';
 import { LOOKS, PHOTOS } from '../core/people';
+import type { AvatarTone, Profile } from '../core/profile';
+import { Icon } from './kit';
 
-const BG = ['#ffd7c2', '#ffe6a8', '#cdebd9', '#ffc9d6', '#d9e4ff', '#f6d3b3'];
+// Backgrounds in the app's flat palette: lilac and grey tints of the brand purple.
+const BG = ['#eeecfe', '#e2defd', '#f0f0f3', '#d9d4fc', '#e8e8ee', '#cfc8fb'];
 const SHIRT = ['#ff7a59', '#2f8f7a', '#7a5cfa', '#e8508f', '#f2a93b', '#3b82c4'];
 const SKIN = ['#f6cba3', '#edb98a', '#d9a06f', '#f3d2b3'];
 const HAIR = ['#2b1a12', '#4a2c1d', '#1f1a17'];
 
-/** A contact's photo if one is listed in PHOTOS, otherwise a flat illustrated portrait. */
+/** "Grandpa Wang" → "GW", "爷爷" → "爷", "Jackie" → "J". */
+export function initials(label: string): string {
+  const s = label.trim();
+  if (!s) return '?';
+  if (/^[一-鿿]/.test(s)) return s[0];
+  const words = s.split(/\s+/).filter(w => /^[A-Za-z0-9]/.test(w));
+  return ((words[0]?.[0] ?? s[0]) + (words.length > 1 ? words[words.length - 1][0] : '')).toUpperCase();
+}
+
+function Disc({ tone, size, label, children }: { tone: AvatarTone; size: number; label: string; children: React.ReactNode }) {
+  return (
+    <span className={'person avt ' + tone} role="img" aria-label={label} style={{ width: size, height: size, fontSize: Math.round(size * 0.36) }}>
+      {children}
+    </span>
+  );
+}
+
+function Photo({ src, label, size, onError }: { src: string; label: string; size: number; onError?: () => void }) {
+  return <img className="person" src={src} alt={label} width={size} height={size} style={{ width: size, height: size }} onError={onError} />;
+}
+
+/** A contact: their photo if listed in PHOTOS, otherwise an illustrated portrait on a flat app-colour circle. */
 export function PersonAvatar({ id, label, size = 56 }: { id: string; label: string; size?: number }) {
   const [broken, setBroken] = useState(false);
   const photo = PHOTOS[id];
@@ -60,5 +85,15 @@ export function PersonAvatar({ id, label, size = 56 }: { id: string; label: stri
       <circle cx="24.5" cy="35" r="1.8" fill="#ff8a7a" opacity=".35" />
       <circle cx="39.5" cy="35" r="1.8" fill="#ff8a7a" opacity=".35" />
     </svg>
+  );
+}
+
+/** The signed-in person, as set on the Profile screen. */
+export function ProfileAvatar({ profile, label, size = 56 }: { profile: Profile; label: string; size?: number }) {
+  if (profile.photo) return <Photo src={profile.photo} label={label} size={size} />;
+  return (
+    <Disc tone={profile.tone} size={size} label={label}>
+      {profile.icon === 'initials' ? initials(label) : <Icon name={profile.icon} />}
+    </Disc>
   );
 }
