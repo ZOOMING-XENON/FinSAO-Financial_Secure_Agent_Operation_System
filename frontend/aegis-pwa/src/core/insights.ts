@@ -219,3 +219,43 @@ export function buildNudges({ budgets, subs, pots, tx, today = new Date(), money
 }
 
 export const centsToMoney = fromCents;
+
+export type Period = 'week' | 'month' | 'year';
+
+/** Inclusive start and exclusive end of the period containing `anchor`, shifted by `offset` periods. */
+export function periodRange(period: Period, offset: number, now = new Date()): { from: Date; to: Date } {
+  if (period === 'week') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay() + offset * 7);
+    return { from: start, to: new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7) };
+  }
+  if (period === 'year') return { from: new Date(now.getFullYear() + offset, 0, 1), to: new Date(now.getFullYear() + offset + 1, 0, 1) };
+  return { from: new Date(now.getFullYear(), now.getMonth() + offset, 1), to: new Date(now.getFullYear(), now.getMonth() + offset + 1, 1) };
+}
+
+/** Totals and buckets (days for a week, months for a year) between two dates. */
+export function rangeSummary(tx: Transaction[], from: Date, to: Date, buckets: 'day' | 'month') {
+  const list: { start: Date; income: bigint; spent: bigint }[] = [];
+  for (let d = new Date(from); d < to; d = buckets === 'day' ? new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1) : new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
+    list.push({ start: new Date(d), income: 0n, spent: 0n });
+  }
+  const byCategory: Record<string, bigint> = {};
+  let spent = 0n;
+  let income = 0n;
+  for (const t of tx) {
+    if (!t.posted_at) continue;
+    const at = new Date(t.posted_at);
+    if (at < from || at >= to) continue;
+    const i = buckets === 'day' ? Math.floor((at.getTime() - from.getTime()) / 86_400_000) : (at.getFullYear() - from.getFullYear()) * 12 + at.getMonth() - from.getMonth();
+    const c = toCents(t.amount);
+    if (isIncome(t)) {
+      income += c;
+      if (list[i]) list[i].income += c;
+    } else if (isSpend(t)) {
+      spent += c;
+      if (list[i]) list[i].spent += c;
+      const k = categoryKey(t.category);
+      byCategory[k] = (byCategory[k] ?? 0n) + c;
+    }
+  }
+  return { spent, income, byCategory, buckets: list };
+}

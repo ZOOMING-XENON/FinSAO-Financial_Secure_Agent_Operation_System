@@ -1,126 +1,137 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { api } from '../core/api';
 import { CATEGORIES, type Transaction } from '../core/types';
-import { direction, monthLabel } from '../core/format';
+import { categoryKey, direction } from '../core/format';
 import { formatMoney, fromCents, isValidAmount, normalizeAmount, toCents } from '../core/money';
 import { useApp, useLoad } from '../app/state';
 import { Icon, Sheet, Skeleton } from '../ui/kit';
-import { TxRow } from '../ui/TxRow';
 import { loadAccounts, loadRecent } from './Home';
 
-interface Month {
-  year: number;
-  month: number;
-}
-
-const key = (m: Month) => `${m.year}-${String(m.month).padStart(2, '0')}`;
-
-const shift = (m: Month, by: number): Month => {
-  const d = new Date(m.year, m.month - 1 + by, 1);
-  return { year: d.getFullYear(), month: d.getMonth() + 1 };
-};
-const thisMonth = (): Month => ({ year: new Date().getFullYear(), month: new Date().getMonth() + 1 });
 const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+const startOfWeek = (d: Date) => addDays(d, -((d.getDay() + 6) % 7)); // weeks start on Monday
 
-/** Short calendar label in integer math: ¥142, ¥1.2k. */
-function compact(cents: bigint): string {
-  const whole = cents / 100n;
-  if (whole < 1000n) return '¥' + whole.toString();
-  const tenths = whole / 100n;
-  return `¥${tenths / 10n}.${tenths % 10n}k`;
-}
-
-interface DayTotals {
-  out: bigint;
-  in: bigint;
-  items: Transaction[];
-}
-
-export function SpendCalendar({ month, tx, selected, onSelect }: { month: Month; tx: Transaction[]; selected: string | null; onSelect: (day: string | null) => void }) {
+/**
+ * One day of money, like a schedule: a week strip to pick the day, then an hour-by-hour
+ * timeline showing when each payment happened.
+ */
+export function DayView({ tx, day, onDay }: { tx: Transaction[]; day: Date; onDay: (d: Date) => void }) {
   const { t, locale } = useApp();
-  const days = useMemo(() => {
-    const map = new Map<string, DayTotals>();
-    for (const x of tx) {
-      if (!x.posted_at) continue;
-      const k = dayKey(new Date(x.posted_at));
-      const d = map.get(k) ?? { out: 0n, in: 0n, items: [] };
-      if (direction(x) === 'in') d.in += toCents(x.amount);
-      else d.out += toCents(x.amount);
-      d.items.push(x);
-      map.set(k, d);
-    }
-    return map;
-  }, [tx]);
-  const max = [...days.values()].reduce((m, d) => (d.out > m ? d.out : m), 0n);
-  const first = new Date(month.year, month.month - 1, 1);
-  const start = new Date(first);
-  start.setDate(1 - first.getDay());
-  const weeks = Math.ceil((first.getDay() + new Date(month.year, month.month, 0).getDate()) / 7);
-  const cells = Array.from({ length: weeks * 7 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+  const picker = useRef<HTMLInputElement>(null);
+  const week = Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(day), i));
   const today = dayKey(new Date());
-  const weekday = (i: number) => new Date(2026, 1, 1 + i).toLocaleDateString(locale, { weekday: 'narrow' }); // Feb 1 2026 is a Sunday
+  const items = useMemo(
+    () => tx.filter(x => x.posted_at && dayKey(new Date(x.posted_at)) === dayKey(day)).sort((a, b) => (a.posted_at ?? '').localeCompare(b.posted_at ?? '')),
+    [tx, day],
+  );
+  const hasTx = useMemo(() => new Set(tx.filter(x => x.posted_at).map(x => dayKey(new Date(x.posted_at!)))), [tx]);
+  const out = items.filter(x => direction(x) === 'out').reduce((s, x) => s + toCents(x.amount), 0n);
+  const inc = items.filter(x => direction(x) === 'in' && x.category !== 'OPENING_BALANCE').reduce((s, x) => s + toCents(x.amount), 0n);
+  const hours = items.map(x => new Date(x.posted_at!).getHours());
+  const first = Math.min(8, ...hours);
+  const last = Math.max(21, ...hours);
+  const slots = Array.from({ length: last - first + 1 }, (_, i) => first + i);
+  const hourLabel = (h: number) => new Date(2026, 0, 1, h).toLocaleTimeString(locale, { hour: 'numeric' });
 
   return (
-    <>
-      <div className="cal" role="grid" aria-label={monthLabel(month.year, month.month, locale)}>
-        {Array.from({ length: 7 }, (_, i) => (
-          <div className="wd" key={'w' + i} role="columnheader">
-            {weekday(i)}
-          </div>
-        ))}
-        {cells.map(d => {
+    <div className="dayview">
+      <div className="dv-head">
+        <button className="dv-month" onClick={() => picker.current?.showPicker?.() ?? picker.current?.click()}>
+          {day.toLocaleDateString(locale, { year: 'numeric', month: 'long' })}
+          <Icon name="i-chev" />
+        </button>
+        <input
+          ref={picker}
+          className="dv-picker"
+          type="date"
+          value={dayKey(day)}
+          max={today}
+          onChange={e => e.target.value && onDay(new Date(e.target.value + 'T00:00:00'))}
+          aria-label={t('day.pick')}
+        />
+        <span className="spacer" />
+        <button className="icon-btn" aria-label={t('day.prevWeek')} onClick={() => onDay(addDays(day, -7))}>
+          <Icon name="i-left" />
+        </button>
+        <button className="icon-btn" aria-label={t('day.nextWeek')} disabled={dayKey(addDays(day, 7)) > today && dayKey(day) === today} onClick={() => onDay(dayKey(addDays(day, 7)) > today ? new Date() : addDays(day, 7))}>
+          <Icon name="i-chev" />
+        </button>
+      </div>
+      <div className="dv-week" role="tablist">
+        {week.map(d => {
           const k = dayKey(d);
-          const info = days.get(k);
-          const inMonth = d.getMonth() === month.month - 1;
-          const cls = ['day', inMonth ? '' : 'other', k === today ? 'today' : '', k === selected ? 'sel' : ''].join(' ');
+          const future = k > today;
           return (
-            <button key={k} className={cls} role="gridcell" aria-selected={k === selected} onClick={() => onSelect(k === selected ? null : k)} disabled={!inMonth}>
-              <span className="n">{d.getDate()}</span>
-              {inMonth && info && info.out > 0n && (
-                <span className={'chipd out' + (max > 0n && info.out * 2n >= max ? ' hot' : '')}>{compact(info.out)}</span>
-              )}
-              {inMonth && info && info.in > 0n && <span className="chipd in">+{compact(info.in)}</span>}
+            <button key={k} role="tab" aria-selected={k === dayKey(day)} className={(k === dayKey(day) ? 'on ' : '') + (k === today ? 'today' : '')} disabled={future} onClick={() => onDay(d)}>
+              <small>{d.toLocaleDateString(locale, { weekday: 'short' })}</small>
+              <b>{d.getDate()}</b>
+              <i className={hasTx.has(k) ? 'dot-on' : ''} />
             </button>
           );
         })}
       </div>
-      <div className="cal-legend">
+
+      <div className="dv-sum">
         <span>
-          <i style={{ background: 'var(--brand-soft)' }} />
-          {t('trends.legendOut')}
+          <small>{t('trends.legendOut')}</small>
+          <b>{formatMoney(fromCents(out))}</b>
         </span>
         <span>
-          <i style={{ background: 'var(--brand-2)' }} />
-          {t('trends.legendBig')}
+          <small>{t('trends.legendIn')}</small>
+          <b className={inc > 0n ? 'good' : ''}>{formatMoney(fromCents(inc))}</b>
         </span>
         <span>
-          <i style={{ background: 'var(--green-bg)' }} />
-          {t('trends.legendIn')}
+          <small>{t('day.count')}</small>
+          <b>{items.length}</b>
         </span>
       </div>
-      {selected && (
-        <section className="card flush">
-          <div className="card-h">
-            <h3>{new Date(selected + 'T00:00:00').toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
-          </div>
-          {(days.get(selected)?.items ?? []).length === 0 && <div className="empty">{t('trends.dayEmpty')}</div>}
-          {days.get(selected)?.items.map(x => <TxRow tx={x} key={x.id} />)}
-        </section>
+
+      {items.length === 0 ? (
+        <div className="card empty">{t('trends.dayEmpty')}</div>
+      ) : (
+        <div className="timeline">
+          {slots.map(h => {
+            const here = items.filter(x => new Date(x.posted_at!).getHours() === h);
+            return (
+              <div className={'tl-row' + (here.length ? ' has' : '')} key={h}>
+                <span className="tl-hour">{hourLabel(h)}</span>
+                <div className="tl-col">
+                  {here.map(x => {
+                    const dir = direction(x);
+                    const c = categoryKey(x.category);
+                    return (
+                      <div className={'tl-card ' + dir} key={x.id}>
+                        <div className="tl-top">
+                          <b>{x.description}</b>
+                          <span className={'amt' + (dir === 'in' ? ' pos' : '')}>
+                            {dir === 'in' ? '+' : dir === 'out' ? '-' : ''}
+                            {formatMoney(x.amount, x.currency)}
+                          </span>
+                        </div>
+                        <div className="tl-meta">
+                          <Icon name={dir === 'in' ? 'c-IN' : dir === 'move' ? 'c-MOVE' : 'c-' + c} />
+                          {dir === 'in' ? t('tx.in') : dir === 'move' ? t('tx.move') : t(`cat.${c}`)}
+                          <span className="spacer" />
+                          <Icon name="i-clock" />
+                          {new Date(x.posted_at!).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
-    </>
+    </div>
   );
 }
 
 export function Calendar() {
-  const { t, locale } = useApp();
-  const [sel, setSel] = useState<Month>(thisMonth());
-  const [day, setDay] = useState<string | null>(null);
+  const { t } = useApp();
+  const [day, setDay] = useState(() => new Date());
   const allTx = useLoad(async () => loadRecent(await loadAccounts(), 200));
-  const monthTx = (allTx.data ?? []).filter(x => x.posted_at?.startsWith(key(sel)));
-  const atLatest = key(sel) >= key(thisMonth());
-  const out = monthTx.filter(x => direction(x) === 'out').reduce((s, x) => s + toCents(x.amount), 0n);
-  const inc = monthTx.filter(x => direction(x) === 'in' && x.category !== 'OPENING_BALANCE').reduce((s, x) => s + toCents(x.amount), 0n);
-
   return (
     <>
       <div className="ph">
@@ -128,30 +139,12 @@ export function Calendar() {
           <Icon name="i-back" />
         </a>
         <h2>{t('ins.calendar')}</h2>
-        <span style={{ width: 40 }} />
-      </div>
-      <div className="cal-head">
-        <button className="icon-btn" aria-label={t('trends.prev')} onClick={() => (setSel(shift(sel, -1)), setDay(null))}>
-          <Icon name="i-left" />
+        <button className="icon-btn" onClick={() => setDay(new Date())} aria-label={t('day.today')}>
+          <Icon name="i-cal" />
         </button>
-        <h2 className="center">{monthLabel(sel.year, sel.month, locale)}</h2>
-        <button className="icon-btn" aria-label={t('trends.next')} disabled={atLatest} style={atLatest ? { opacity: 0.35 } : undefined} onClick={() => (setSel(shift(sel, 1)), setDay(null))}>
-          <Icon name="i-chev" />
-        </button>
-      </div>
-      <div className="stats cal-stats">
-        <div className="stat s-out">
-          <small>{t('trends.legendOut')}</small>
-          <b>{formatMoney(fromCents(out))}</b>
-        </div>
-        <div className="stat s-in">
-          <small>{t('trends.legendIn')}</small>
-          <b>{formatMoney(fromCents(inc))}</b>
-        </div>
       </div>
       {allTx.loading && !allTx.data && <Skeleton rows={4} />}
-      {allTx.data && <SpendCalendar month={sel} tx={monthTx} selected={day} onSelect={setDay} />}
-      {allTx.data && !day && <p className="mut small" style={{ margin: '0 2px 14px' }}>{t('trends.tapDay')}</p>}
+      {allTx.data && <DayView tx={allTx.data} day={day} onDay={setDay} />}
     </>
   );
 }

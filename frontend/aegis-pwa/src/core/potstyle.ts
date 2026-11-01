@@ -1,52 +1,79 @@
-// Per-device pot look (emoji + colour theme). Banking Core stores the money, not the look,
-// so this lives in localStorage as a convenience and falls back to a guess from the name.
+// Per-device pot look (icon + flat colour) and saving-plan type. Banking Core stores the money,
+// not the look, so this lives in localStorage as a convenience with a guess from the name.
 import { hashIndex } from './format';
+import { fromCents, toCents } from './money';
 
 export const POT_THEMES = [
-  { id: 'violet', bg: 'linear-gradient(140deg, #5b3df5 0%, #a14dff 60%, #ff5fa2 100%)', ring: '#ffffff' },
-  { id: 'ocean', bg: 'linear-gradient(140deg, #0b8f84 0%, #13a89a 45%, #3d8bff 100%)', ring: '#ffffff' },
-  { id: 'sunset', bg: 'linear-gradient(140deg, #ff7a1a 0%, #ff9f1c 40%, #ff5fa2 100%)', ring: '#ffffff' },
-  { id: 'berry', bg: 'linear-gradient(140deg, #c2185b 0%, #ff5fa2 55%, #ffb347 100%)', ring: '#ffffff' },
-  { id: 'sky', bg: 'linear-gradient(140deg, #1f63d6 0%, #3d8bff 50%, #2ec4b6 100%)', ring: '#ffffff' },
-  { id: 'forest', bg: 'linear-gradient(140deg, #0f6b4f 0%, #1baf7a 55%, #c3e66e 100%)', ring: '#ffffff' },
+  { id: 'purple', bg: '#5b4cf5', fg: '#ffffff' },
+  { id: 'black', bg: '#121215', fg: '#ffffff' },
+  { id: 'white', bg: '#ffffff', fg: '#111114' },
+  { id: 'lilac', bg: '#e9e6fe', fg: '#2d2780' },
+  { id: 'deep', bg: '#2d2780', fg: '#ffffff' },
+  { id: 'grey', bg: '#e7e7ec', fg: '#111114' },
 ] as const;
+export type PotTheme = (typeof POT_THEMES)[number]['id'];
 
-export const POT_EMOJI = ['✈️', '📱', '🛟', '🏠', '🎓', '🎁', '🚗', '💍', '🐶', '🎮', '🌴', '💰'];
+export const POT_ICONS = ['p-plane', 'i-phone', 'p-lifebuoy', 'i-home', 'p-cap', 'p-gift', 'p-car', 'p-ring', 'p-heart', 'p-game', 'p-sun', 'p-coins'];
 
 export const POT_TEMPLATES = [
-  { key: 'travel', emoji: '✈️', theme: 'ocean', target: '8000' },
-  { key: 'emergency', emoji: '🛟', theme: 'forest', target: '20000' },
-  { key: 'phone', emoji: '📱', theme: 'violet', target: '6000' },
-  { key: 'home', emoji: '🏠', theme: 'sky', target: '50000' },
-  { key: 'study', emoji: '🎓', theme: 'sunset', target: '15000' },
-  { key: 'gift', emoji: '🎁', theme: 'berry', target: '1000' },
+  { key: 'travel', icon: 'p-plane', theme: 'purple', target: '8000' },
+  { key: 'emergency', icon: 'p-lifebuoy', theme: 'black', target: '20000' },
+  { key: 'phone', icon: 'i-phone', theme: 'lilac', target: '6000' },
+  { key: 'home', icon: 'i-home', theme: 'deep', target: '50000' },
+  { key: 'study', icon: 'p-cap', theme: 'white', target: '15000' },
+  { key: 'gift', icon: 'p-gift', theme: 'grey', target: '1000' },
 ] as const;
 
+/** Saving plans from classic bookkeeping apps. Week/day challenges raise the deposit each time. */
+export type PlanType = 'fixed' | 'flexible' | 'week52' | 'day365';
+export const PLAN_TYPES: PlanType[] = ['fixed', 'flexible', 'week52', 'day365'];
+
+/** Target for a challenge: the n-th deposit is start + (n-1) × step, over 52 weeks or 365 days. */
+export function challengeTarget(type: PlanType, start: string, step: string): string | null {
+  const n = type === 'week52' ? 52n : type === 'day365' ? 365n : 0n;
+  if (!n) return null;
+  const s = toCents(start);
+  const d = toCents(step);
+  return fromCents(n * s + ((n * (n - 1n)) / 2n) * d);
+}
+
+/** Deposit due for the current period of a challenge, counted from the pot's start. */
+export function challengeDue(type: PlanType, start: string, step: string, createdAt: string, now = new Date()): { n: number; amount: string } | null {
+  if (type !== 'week52' && type !== 'day365') return null;
+  const days = Math.max(0, Math.floor((now.getTime() - Date.parse(createdAt)) / 86_400_000));
+  const n = Math.min(type === 'week52' ? 52 : 365, (type === 'week52' ? Math.floor(days / 7) : days) + 1);
+  return { n, amount: fromCents(toCents(start) + BigInt(n - 1) * toCents(step)) };
+}
+
 const GUESS: [RegExp, string][] = [
-  [/trip|travel|旅|japan|日本|holiday|vacation/i, '✈️'],
-  [/phone|手机|iphone|laptop|电脑/i, '📱'],
-  [/emergency|应急|rainy|safety/i, '🛟'],
-  [/home|house|房|rent|apartment/i, '🏠'],
-  [/study|school|学|course|tuition/i, '🎓'],
-  [/gift|礼|birthday|生日/i, '🎁'],
-  [/car|车/i, '🚗'],
-  [/wedding|婚/i, '💍'],
+  [/trip|travel|旅|japan|日本|holiday|vacation/i, 'p-plane'],
+  [/phone|手机|iphone|laptop|电脑/i, 'i-phone'],
+  [/emergency|应急|rainy|safety/i, 'p-lifebuoy'],
+  [/home|house|房|rent|apartment/i, 'i-home'],
+  [/study|school|学|course|tuition/i, 'p-cap'],
+  [/gift|礼|birthday|生日/i, 'p-gift'],
+  [/car|车/i, 'p-car'],
+  [/wedding|婚/i, 'p-ring'],
 ];
 
 export interface PotLook {
-  emoji: string;
-  theme: (typeof POT_THEMES)[number]['id'];
+  icon: string;
+  theme: PotTheme;
+  plan?: { type: PlanType; start: string; step: string };
 }
 
 export function potLook(id: string, name: string): PotLook {
   try {
     const raw = localStorage.getItem('aegis.pot.' + id);
-    if (raw) return JSON.parse(raw) as PotLook;
+    if (raw) {
+      const saved = JSON.parse(raw) as PotLook & { emoji?: string };
+      if (saved.icon && POT_THEMES.some(x => x.id === saved.theme)) return saved;
+    }
   } catch {
     /* storage unavailable */
   }
-  const emoji = GUESS.find(([re]) => re.test(name))?.[1] ?? '💰';
-  return { emoji, theme: POT_THEMES[hashIndex(id, POT_THEMES.length)].id };
+  const icon = GUESS.find(([re]) => re.test(name))?.[1] ?? 'p-coins';
+  return { icon, theme: POT_THEMES[hashIndex(id, POT_THEMES.length)].id };
 }
 
 export function savePotLook(id: string, look: PotLook) {
@@ -57,7 +84,9 @@ export function savePotLook(id: string, look: PotLook) {
   }
 }
 
-export const themeBg = (theme: string) => (POT_THEMES.find(x => x.id === theme) ?? POT_THEMES[0]).bg;
+const theme = (id: string) => POT_THEMES.find(x => x.id === id) ?? POT_THEMES[0];
+export const themeBg = (id: string) => theme(id).bg;
+export const themeFg = (id: string) => theme(id).fg;
 
 /** Milestones already celebrated for a pot, so each one fires once per device. */
 export function celebrated(id: string): number[] {

@@ -279,6 +279,14 @@ export function mockCore(method: string, path: string, q: Record<string, string>
   }
 
   if (method === 'GET' && path === '/cards') return [200, db.cards];
+  if (method === 'PATCH' && (r = m(/^\/cards\/([^/]+)\/limit$/))) {
+    const card = db.cards.find(c => c.id === r![1]);
+    if (!card) return err(404, 'NOT_FOUND');
+    const denied = consume(b.authorization_ref, card.id as string, 'card.limit');
+    if (denied) return denied;
+    card.spending_limit = fromCents(toCents(String(b.spending_limit)));
+    return [200, card];
+  }
   if (method === 'POST' && (r = m(/^\/cards\/([^/]+)\/(freeze|unfreeze|report-lost)$/))) {
     const card = db.cards.find(c => c.id === r![1]);
     if (!card) return err(404, 'NOT_FOUND');
