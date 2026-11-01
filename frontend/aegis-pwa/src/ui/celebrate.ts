@@ -1,5 +1,5 @@
 // Small moments of delight: confetti bursts and a light haptic tap.
-const COLORS = ['#6a4dff', '#ff5fa2', '#2ec4b6', '#ffb347', '#3d8bff', '#ffd43b'];
+const COLORS = ['#5b4cf5', '#8f84f8', '#c9c3fc', '#111114', '#b8b8c1', '#ffffff'];
 
 export function haptic(pattern: number | number[] = 12) {
   try {

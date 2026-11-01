@@ -119,11 +119,11 @@ export function BillsCard({ subs }: { subs: Subscription[] }) {
 }
 
 export function Home() {
-  const { t, lang, toast } = useApp();
+  const { t, lang } = useApp();
   const pic = useLoad(loadMoneyPicture);
   const nudges = useNudges(pic.data);
-  const [slide, setSlide] = useState(0);
   const [hidden, setHidden] = useState(readHidden);
+  const [acct, setAcct] = useState<string>('all');
   const toggleHidden = () => {
     setHidden(h => {
       try {
@@ -134,111 +134,99 @@ export function Home() {
       return !h;
     });
   };
-  const mask = <span className="amt masked">¥ ••••••</span>;
   const accounts = pic.data?.accounts;
-  const total = fromCents((accounts ?? []).reduce((s, a) => s + toCents(a.balance), 0n));
+  const chosen = accounts?.find(a => a.id === acct);
+  const total = chosen ? chosen.balance : fromCents((accounts ?? []).reduce((s, a) => s + toCents(a.balance), 0n));
   const month = pic.data ? summarize(pic.data.tx, currentMonth()) : null;
   const net = month ? month.income - month.spent : 0n;
   const hour = new Date().getHours();
-  const first = lang === 'zh' ? PROFILE.nameZh : PROFILE.name.split(' ')[0];
-  const greet = t(hour < 12 ? 'home.morning' : hour < 18 ? 'home.afternoon' : 'home.evening', { name: first });
+  const name = lang === 'zh' ? PROFILE.nameZh : PROFILE.name;
+  const cardsCount = (accounts?.length ?? 0) + 1;
 
   return (
     <>
       <header className="home-top">
         <div className="home-bar">
           <a href="#/me" aria-label={t('nav.me')}>
-            <PersonAvatar id={PROFILE.key} label={PROFILE.name} size={40} />
+            <PersonAvatar id={PROFILE.key} label={PROFILE.name} size={42} />
           </a>
-          <span className="home-hi">{greet}</span>
+          <span className="home-hi">
+            <small>{t(hour < 12 ? 'home.morningShort' : hour < 18 ? 'home.afternoonShort' : 'home.eveningShort')}</small>
+            <b>{name}</b>
+          </span>
           <span className="spacer" />
-          <a className="chip ok" href="#/me">
-            <Icon name="i-shield" />
-            {t('home.protected')}
+          <a className="icon-btn" href="#/insights" aria-label={t('home.forYou')}>
+            <Icon name="i-bell" />
           </a>
         </div>
+
         <div className="home-total">
-          <span className="hero-t total-row">
-            {t('home.total')}
+          <span className="acct-label">{chosen ? `${chosen.name} · ${chosen.account_number}` : t('home.allAccounts', { n: accounts?.length ?? 0 })}</span>
+          <span className="total-row">
+            {hidden ? <span className="amt big masked">¥ ••••••</span> : accounts ? <Amount value={total} className="big" /> : <span className="amt big">…</span>}
             <button className="eye" onClick={toggleHidden} aria-pressed={hidden} aria-label={t(hidden ? 'home.showBalance' : 'home.hideBalance')}>
               <Icon name={hidden ? 'i-eye-off' : 'i-eye'} />
             </button>
           </span>
-          {hidden ? <span className="amt big masked">¥ ••••••</span> : accounts ? <Amount value={total} className="big" /> : <span className="amt big">…</span>}
-          {!hidden && month && (month.income > 0n || month.spent > 0n) && (
-            <span className={'delta ' + (net >= 0n ? 'up' : 'down')}>
-              <Icon name={net >= 0n ? 'i-trend-up' : 'i-trend-down'} />
-              {t(net >= 0n ? 'home.netUp' : 'home.netDown', { amount: formatMoney(fromCents(net < 0n ? -net : net)) })}
-            </span>
-          )}
-        </div>
-      </header>
-
-      <div className="pad">
-        <div
-          className="carousel"
-          onScroll={e => {
-            const el = e.currentTarget;
-            const width = (el.firstElementChild as HTMLElement | null)?.offsetWidth || 1;
-            setSlide(Math.round(el.scrollLeft / (width + 12)));
-          }}
-        >
-          {!accounts && <div className="acct g0" />}
-          {(accounts ?? []).map((a, i) => (
-            <section className={'acct g' + (i % 3)} key={a.id} aria-label={a.name}>
-              <div className="acct-head">
-                <div>
-                  <div className="acct-name">{a.name}</div>
-                  <div className="acct-no">
-                    <Icon name="i-lock" />
-                    •••• {a.account_number.slice(-4)} · {a.currency}
-                  </div>
-                </div>
-                <Icon name="i-shield" className="acct-badge" />
-              </div>
-              <div className="acct-bal">
-                {hidden ? mask : <Amount value={a.balance} currency={a.currency} />}
-              </div>
-            </section>
-          ))}
+          <span className="updated">
+            <Icon name="i-clock" />
+            {t('home.updated')}
+            {!hidden && !chosen && month && (month.income > 0n || month.spent > 0n) && (
+              <span className={net >= 0n ? 'good' : 'bad'}>
+                {' · '}
+                {(net >= 0n ? '+' : '-') + formatMoney(fromCents(net < 0n ? -net : net))} {t('home.thisMonth')}
+              </span>
+            )}
+          </span>
         </div>
         {(accounts?.length ?? 0) > 1 && (
-          <div className="dots" aria-hidden="true">
-            {accounts!.map((a, i) => (
-              <i key={a.id} className={i === slide ? 'on' : ''} />
+          <div className="acct-chips" role="tablist">
+            <button className={acct === 'all' ? 'on' : ''} onClick={() => setAcct('all')} role="tab" aria-selected={acct === 'all'}>
+              {t('home.all')}
+            </button>
+            {accounts!.map(a => (
+              <button key={a.id} className={acct === a.id ? 'on' : ''} onClick={() => setAcct(a.id)} role="tab" aria-selected={acct === a.id}>
+                {a.name} ··{a.account_number.slice(-4)}
+              </button>
             ))}
           </div>
         )}
+      </header>
 
-        <nav className="actions" aria-label={t('home.quick')}>
-          <a href="#/pay" className="act a1">
-            <span>
-              <Icon name="i-send" />
-            </span>
-            {t('home.tileSend')}
+      <div className="pad">
+        <div className="sec-h">
+          <h2>{t('home.quick')}</h2>
+          <a className="link" href="#/services">
+            {t('home.more')}
           </a>
-          <a href="#/track" className="act a2">
-            <span>
-              <Icon name="i-receipt" />
-            </span>
-            {t('home.tileScan')}
+        </div>
+        <nav className="quick" aria-label={t('home.quick')}>
+          <a className="qa" href="#/pay">
+            <Icon name="i-send" />
+            <b>{t('home.tileSend')}</b>
+            <small>{t('home.qaSend')}</small>
           </a>
-          <a href="#/wealth" className="act a3">
-            <span>
-              <Icon name="i-target" />
-            </span>
-            {t('home.tileSave')}
+          <a className="qa" href="#/ledger">
+            <Icon name="i-book" />
+            <b>{t('home.qaRecord')}</b>
+            <small>{t('home.qaRecordD')}</small>
           </a>
-          <button className="act a4" onClick={() => toast(t('home.addMoneyPreview'))}>
-            <span>
-              <Icon name="i-plus" />
-            </span>
-            {t('home.addMoney')}
-          </button>
+          <a className="qa" href="#/insights">
+            <Icon name="i-bolt" />
+            <b>{t('home.qaBills')}</b>
+            <small>{t('home.qaBillsD')}</small>
+          </a>
+          <a className="qa" href="#/cards">
+            <Icon name="i-card" />
+            <b>{t('nav.cards')}</b>
+            <small>{t('home.qaCardsD', { n: cardsCount })}</small>
+          </a>
         </nav>
 
         <button className="ask" onClick={() => go('aegis')}>
-          <span className="orb-sm" />
+          <span className="orb-sm">
+            <Icon name="i-spark" />
+          </span>
           <span>{t('home.ask')}</span>
           <Icon name="i-mic" />
         </button>
@@ -248,18 +236,23 @@ export function Home() {
             <div className="sec-h">
               <h2>{t('home.forYou')}</h2>
               <a className="link" href="#/insights">
-                {t('home.seeInsights')}
+                {t('home.seeAll')}
               </a>
             </div>
             <div className="nudges">
-              {nudges.slice(0, 6).map(x => (
+              {nudges.slice(0, 3).map(x => (
                 <NudgeCard n={x} key={x.id} />
               ))}
             </div>
           </>
         )}
 
-        {pic.data && <BillsCard subs={pic.data.subs} />}
+        {pic.data && (
+          <>
+            <div style={{ height: 14 }} />
+            <BillsCard subs={pic.data.subs} />
+          </>
+        )}
 
         <div className="sec-h">
           <h2>{t('home.people')}</h2>
@@ -269,13 +262,13 @@ export function Home() {
         </div>
         <PeopleStrip />
 
-        <section className="card flush" aria-label={t('home.activity')}>
-          <div className="card-h">
-            <h3>{t('home.activity')}</h3>
-            <a className="link" href="#/activity">
-              {t('home.seeAll')}
-            </a>
-          </div>
+        <div className="sec-h">
+          <h2>{t('home.history')}</h2>
+          <a className="link" href="#/activity">
+            {t('home.seeAll')}
+          </a>
+        </div>
+        <section className="card flush" aria-label={t('home.history')}>
           {pic.loading && !pic.data && <Skeleton rows={3} />}
           {pic.data?.tx.length === 0 && <div className="empty">{t('home.noActivity')}</div>}
           {pic.data?.tx.slice(0, 5).map(tx => <TxRow tx={tx} key={tx.id} />)}
