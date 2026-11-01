@@ -22,10 +22,13 @@ from agent.config import AgentSettings, get_agent_settings
 from agent.context import SlotTracker
 from agent.contracts import AgentRequest, AgentResponse, TrustedAgentContext
 from agent.durable import DurableEvent, DurableTask, DurableTaskManager, ResumeRequest
+from agent.expenses import ExpenseRouter
 from agent.factory import build_model_provider
 from agent.graph import build_runtime_agent_graph
 from agent.hybrid import HybridPlanner, HybridRouter
+from agent.jev_http import HttpJevAdapter
 from agent.planning import BaselinePlanner, PlanVerifier
+from agent.privacy_broker import PrivacyBroker
 from agent.proactive import (
     ProactiveConfigRequest,
     ProactiveEventEngine,
@@ -48,16 +51,40 @@ _banking_client = BankingHttpClient(
 _registry = ToolRegistry()
 register_default_tools(_registry, _banking_client)
 _model_provider = build_model_provider(_settings)
+_jev_adapter = (
+    HttpJevAdapter(
+        api_key=_settings.jev_api_key.get_secret_value(),
+        base_url=_settings.jev_base_url,
+        model=_settings.jev_model,
+        timeout_seconds=_settings.jev_timeout_seconds,
+    )
+    if _settings.jev_enabled and _settings.jev_api_key is not None
+    else None
+)
+_privacy_broker = PrivacyBroker() if _settings.privacy_broker_enabled else None
 _gateway = ToolGateway(_registry)
 _service = AgentService(
     router=HybridRouter(
-        RuleRouter(), _model_provider, routing_mode=_settings.agent_routing_mode
+        ExpenseRouter(
+            RuleRouter(),
+            enabled=_settings.expense_chat_enabled and _settings.expense_tracking_enabled,
+        ),
+        _model_provider,
+        routing_mode=_settings.agent_routing_mode,
+        jev_adapter=_jev_adapter,
+        jev_enabled=_settings.jev_enabled,
+        privacy_broker=_privacy_broker,
     ),
     slots=SlotTracker(),
     planner=HybridPlanner(BaselinePlanner(), _model_provider),
     verifier=PlanVerifier(_registry),
     capabilities=CapabilityBroker(_registry),
     gateway=_gateway,
+    plan_reviewer=(
+        _jev_adapter
+        if _settings.jev_enabled and _settings.jev_pass2_enabled
+        else None
+    ),
 )
 _task_store = SqlAlchemyTaskStore(_settings.agent_database_url)
 _runtime_graph = build_runtime_agent_graph(_service, _gateway, MemorySaver())
@@ -83,6 +110,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await _banking_client.close()
         if _model_provider is not None:
             await _model_provider.close()
+        if _jev_adapter is not None:
+            await _jev_adapter.close()
 
 
 app = FastAPI(title="FinPilot Agent API", version="0.1.0", lifespan=lifespan)

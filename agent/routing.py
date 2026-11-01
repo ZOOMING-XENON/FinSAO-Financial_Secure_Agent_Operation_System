@@ -13,6 +13,9 @@ class Intent(StrEnum):
     LIST_ACCOUNTS = "LIST_ACCOUNTS"
     GET_BALANCE = "GET_BALANCE"
     GET_TRANSACTIONS = "GET_TRANSACTIONS"
+    TRACK_EXPENSES = "TRACK_EXPENSES"
+    SUMMARIZE_EXPENSES = "SUMMARIZE_EXPENSES"
+    CORRECT_EXPENSE_CATEGORY = "CORRECT_EXPENSE_CATEGORY"
     TRANSFER = "TRANSFER"
     ANALYZE_SPENDING = "ANALYZE_SPENDING"
     LIST_BUDGETS = "LIST_BUDGETS"
@@ -42,9 +45,14 @@ class Intent(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+CHAT_UNAVAILABLE_INTENTS: frozenset[Intent] = frozenset({Intent.CORRECT_EXPENSE_CATEGORY})
+
 REQUIRED_SLOTS_BY_INTENT: dict[Intent, tuple[str, ...]] = {
     Intent.GET_BALANCE: ("account_id",),
     Intent.GET_TRANSACTIONS: ("account_id",),
+    Intent.TRACK_EXPENSES: (),
+    Intent.SUMMARIZE_EXPENSES: (),
+    Intent.CORRECT_EXPENSE_CATEGORY: (),
     Intent.TRANSFER: ("source_account_id", "destination_account_id", "amount", "currency"),
     Intent.ANALYZE_SPENDING: ("year", "month"),
     Intent.GET_BUDGET_STATUS: ("resource_id",),
@@ -127,6 +135,26 @@ class RuleRouter:
                 complexity=5,
                 confidence=1.0,
                 reason="untrusted instruction marker requires safe fallback",
+            )
+        if any(
+            word in normalized
+            for word in ("expense", "expenses", "spending", "spent", "消费", "支出", "花费")
+        ):
+            if any(
+                word in normalized
+                for word in ("summary", "total", "sum", "汇总", "总额", "多少")
+            ):
+                return self._result(
+                    Intent.SUMMARIZE_EXPENSES,
+                    route=Route.PLANNER,
+                    complexity=2,
+                    reason="expense summary requires deterministic query planning",
+                )
+            return self._result(
+                Intent.TRACK_EXPENSES,
+                route=Route.PLANNER,
+                complexity=2,
+                reason="expense list requires deterministic query planning",
             )
         if any(word in normalized for word in ("转账", "转给", "汇款")) or re.search(
             r"转\d", normalized

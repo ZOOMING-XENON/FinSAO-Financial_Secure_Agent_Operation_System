@@ -1,9 +1,9 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agent_tools.client import BankingClientError, BankingHttpClient
 from agent_tools.contracts import BaseBankingTool, ExecutionContext
@@ -120,6 +120,12 @@ class AnalyticsTool(BaseBankingTool[BaseModel, BaseModel]):
     ) -> None:
         self.client, self.name, self.description = client, name, description
         self.action, self.risk_policy = action, risk
+        self.mutates_data = name in {
+            "categorize_transaction",
+            "create_budget",
+            "update_budget",
+            "cancel_subscription",
+        }
         self.input_model, self.output_model = input_model, output_model
         self.method, self.path = method, path
 
@@ -156,6 +162,103 @@ class AnalyticsTool(BaseBankingTool[BaseModel, BaseModel]):
             json=values if self.method != "GET" else None,
             params=values if self.method == "GET" else None,
             mutation=self.method != "GET",
+        )
+
+
+class ExpenseQueryInput(BaseModel):
+    account_id: UUID | None = None
+    start: datetime | None = None
+    end: datetime | None = None
+    category: str | None = None
+    merchant: str | None = None
+    minimum_amount: MoneyDecimal | None = None
+    maximum_amount: MoneyDecimal | None = None
+    sort_by: Literal["posted_at", "amount", "category", "merchant"] = "posted_at"
+    sort_direction: Literal["asc", "desc"] = "desc"
+    limit: int = 50
+    offset: int = Field(default=0, ge=0, le=1000)
+
+
+class ExpenseSummaryInput(BaseModel):
+    account_id: UUID | None = None
+    start: datetime | None = None
+    end: datetime | None = None
+    category: str | None = None
+    merchant: str | None = None
+    minimum_amount: MoneyDecimal | None = None
+    maximum_amount: MoneyDecimal | None = None
+
+
+class ExpenseListOutput(BaseModel):
+    items: list[TransactionOutput]
+    limit: int
+    offset: int
+
+
+class ExpenseSummaryOutput(BaseModel):
+    total: Decimal | None
+    transaction_count: int
+    totals_by_currency: dict[str, Decimal]
+    by_category: dict[str, dict[str, Decimal]]
+    by_merchant: dict[str, dict[str, Decimal]]
+
+
+def _params(values: dict[str, object]) -> dict[str, str | int | float | bool | None]:
+    result: dict[str, str | int | float | bool | None] = {}
+    for key, value in values.items():
+        if value is None:
+            continue
+        if isinstance(value, Decimal):
+            result[key] = str(value)
+        elif isinstance(value, (str, int, float, bool)):
+            result[key] = value
+        else:
+            result[key] = str(value)
+    return result
+
+
+class GetExpensesTool(BaseBankingTool[ExpenseQueryInput, ExpenseListOutput]):
+    name = "get_expenses"
+    description = "List expenses with filters, sorting, and pagination"
+    action = "expenses.query"
+    risk_policy = "GREEN"
+    input_model = ExpenseQueryInput
+    output_model = ExpenseListOutput
+
+    def __init__(self, client: BankingHttpClient) -> None:
+        self.client = client
+
+    async def execute(
+        self, input_data: ExpenseQueryInput, context: ExecutionContext
+    ) -> ExpenseListOutput:
+        values = _params(input_data.model_dump(mode="json"))
+        account_id = values.pop("account_id", None)
+        path = f"/accounts/{account_id}/transactions" if account_id else "/transactions"
+        return await self.client.request(
+            "GET", path, context, ExpenseListOutput, params=values
+        )
+
+
+class SummarizeExpensesTool(BaseBankingTool[ExpenseSummaryInput, ExpenseSummaryOutput]):
+    name = "summarize_expenses"
+    description = "Summarize expenses with filters"
+    action = "expenses.summary"
+    risk_policy = "GREEN"
+    input_model = ExpenseSummaryInput
+    output_model = ExpenseSummaryOutput
+
+    def __init__(self, client: BankingHttpClient) -> None:
+        self.client = client
+
+    async def execute(
+        self, input_data: ExpenseSummaryInput, context: ExecutionContext
+    ) -> ExpenseSummaryOutput:
+        return await self.client.request(
+            "GET",
+            "/analytics/expenses/summary",
+            context,
+            ExpenseSummaryOutput,
+            params=_params(input_data.model_dump(mode="json")),
         )
 
 
@@ -263,16 +366,20 @@ def analytics_tools(client: BankingHttpClient) -> list[BaseBankingTool[Any, Any]
         ),
     ]
     return [
-        AnalyticsTool(
-            client,
-            name=n,
-            description=d,
-            action=a,
-            risk=r,
-            input_model=i,
-            output_model=o,
-            method=m,
-            path=p,
-        )
-        for n, d, a, r, i, o, m, p in specs
+        GetExpensesTool(client),
+        SummarizeExpensesTool(client),
+        *[
+            AnalyticsTool(
+                client,
+                name=n,
+                description=d,
+                action=a,
+                risk=r,
+                input_model=i,
+                output_model=o,
+                method=m,
+                path=p,
+            )
+            for n, d, a, r, i, o, m, p in specs
+        ],
     ]

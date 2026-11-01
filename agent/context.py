@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from agent.routing import Intent, IntentResult
 
@@ -104,6 +105,119 @@ class SlotTracker:
             facts["account_id"] = SlotFact(
                 "account_id", str(UUID(ids[0])), FactSource.USER_EXPLICIT
             )
+        elif intent.intent in {Intent.TRACK_EXPENSES, Intent.SUMMARIZE_EXPENSES}:
+            lowered = text.lower()
+            now = datetime.now(ZoneInfo("Asia/Shanghai"))
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            end = (
+                start.replace(year=start.year + 1, month=1)
+                if start.month == 12
+                else start.replace(month=start.month + 1)
+            )
+            if any(word in lowered for word in ("last month", "上个月", "上月")):
+                end = start
+                start = (
+                    start.replace(year=start.year - 1, month=12)
+                    if start.month == 1
+                    else start.replace(month=start.month - 1)
+                )
+            elif any(word in lowered for word in ("last 7 days", "最近7天", "近7天")):
+                end = now + timedelta(days=1)
+                start = now - timedelta(days=6)
+            elif any(word in lowered for word in ("yesterday", "昨天")):
+                end = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                start = end - timedelta(days=1)
+            elif any(word in lowered for word in ("today", "今天")):
+                start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                end = start + timedelta(days=1)
+            if ids:
+                facts["account_id"] = SlotFact(
+                    "account_id", str(UUID(ids[0])), FactSource.USER_EXPLICIT
+                )
+            facts["start"] = SlotFact("start", start.isoformat(), FactSource.SYSTEM_CONSTANT)
+            facts["end"] = SlotFact("end", end.isoformat(), FactSource.SYSTEM_CONSTANT)
+            categories = {
+                "dining": "DINING",
+                "restaurant": "DINING",
+                "餐饮": "DINING",
+                "grocer": "GROCERIES",
+                "supermarket": "GROCERIES",
+                "超市": "GROCERIES",
+                "transport": "TRANSPORT",
+                "taxi": "TRANSPORT",
+                "交通": "TRANSPORT",
+                "household": "HOUSEHOLD",
+                "家庭": "HOUSEHOLD",
+                "entertainment": "ENTERTAINMENT",
+                "娱乐": "ENTERTAINMENT",
+                "health": "HEALTHCARE",
+                "医疗": "HEALTHCARE",
+                "education": "EDUCATION",
+                "教育": "EDUCATION",
+                "travel": "TRAVEL",
+                "旅行": "TRAVEL",
+                "shopping": "SHOPPING",
+                "购物": "SHOPPING",
+                "utilities": "UTILITIES",
+                "水电": "UTILITIES",
+                "fees": "FEES",
+                "费用": "FEES",
+            }
+            for word, cat_value in categories.items():
+                if word in lowered:
+                    facts["category"] = SlotFact(
+                        "category", cat_value, FactSource.USER_EXPLICIT
+                    )
+                    break
+            sort_by, sort_direction = "posted_at", "desc"
+            if any(word in lowered for word in ("largest", "biggest", "最大", "金额最大")):
+                sort_by, sort_direction = "amount", "desc"
+            elif any(word in lowered for word in ("smallest", "最小", "金额最小")):
+                sort_by, sort_direction = "amount", "asc"
+            elif any(word in lowered for word in ("oldest", "最早")):
+                sort_by, sort_direction = "posted_at", "asc"
+            elif any(word in lowered for word in ("by merchant", "按商家")):
+                sort_by, sort_direction = "merchant", "asc"
+            elif any(word in lowered for word in ("by category", "按类别")):
+                sort_by, sort_direction = "category", "asc"
+            if any(word in lowered for word in ("ascending", "升序")):
+                sort_direction = "asc"
+            elif any(word in lowered for word in ("descending", "降序")):
+                sort_direction = "desc"
+            facts["sort_by"] = SlotFact("sort_by", sort_by, FactSource.SYSTEM_CONSTANT)
+            facts["sort_direction"] = SlotFact(
+                "sort_direction", sort_direction, FactSource.SYSTEM_CONSTANT
+            )
+            limit_match = re.search(r"(?:top|前)\s*(\d+)", lowered)
+            if limit_match is None:
+                limit_match = re.search(r"(\d+)\s*(?:largest|smallest|expenses)", lowered)
+            if limit_match is not None:
+                facts["limit"] = SlotFact(
+                    "limit", int(limit_match.group(1)), FactSource.USER_EXPLICIT
+                )
+            range_match = re.search(
+                r"(?:between|从)\s*(\d+(?:\.\d{1,2})?)\s*(?:and|到)\s*(\d+(?:\.\d{1,2})?)",
+                lowered,
+            )
+            if range_match is not None:
+                facts["minimum_amount"] = SlotFact(
+                    "minimum_amount", range_match.group(1), FactSource.USER_EXPLICIT
+                )
+                facts["maximum_amount"] = SlotFact(
+                    "maximum_amount", range_match.group(2), FactSource.USER_EXPLICIT
+                )
+            elif any(word in lowered for word in ("over", "above", "大于")):
+                over = re.search(r"(?:over|above|大于)\s*(\d+(?:\.\d{1,2})?)", lowered)
+                if over is not None:
+                    facts["minimum_amount"] = SlotFact(
+                        "minimum_amount", over.group(1), FactSource.USER_EXPLICIT
+                    )
+            elif any(word in lowered for word in ("under", "below", "小于")):
+                under = re.search(r"(?:under|below|小于)\s*(\d+(?:\.\d{1,2})?)", lowered)
+                if under is not None:
+                    facts["maximum_amount"] = SlotFact(
+                        "maximum_amount", under.group(1), FactSource.USER_EXPLICIT
+                    )
         elif intent.intent == Intent.ANALYZE_SPENDING:
             match = re.search(r"(20\d{2})[-年/](\d{1,2})", text)
             today = date.today()
@@ -143,7 +257,7 @@ class SlotTracker:
             if amount:
                 facts["limit_amount"] = SlotFact("limit_amount", amount, FactSource.USER_EXPLICIT)
         elif intent.intent == Intent.CREATE_BUDGET:
-            category = next(
+            category: str | None = next(
                 (
                     value
                     for word, value in {

@@ -117,6 +117,17 @@ class EndpointTool(BaseBankingTool[BaseModel, BaseModel]):
         self.client = client
         self.name, self.description, self.action = name, description, action
         self.risk_policy, self.input_model, self.output_model = risk, input_model, output_model
+        self.mutates_data = name in {
+            "update_card_limit",
+            "freeze_card",
+            "unfreeze_card",
+            "report_card_lost",
+            "assess_risk_profile",
+            "create_wealth_subscription_draft",
+            "commit_wealth_subscription",
+            "create_wealth_redemption_draft",
+            "commit_wealth_redemption",
+        }
         self.method, self.path, self.list_response = method, path, list_response
 
     async def execute(self, input_data: BaseModel, context: ExecutionContext) -> BaseModel:
