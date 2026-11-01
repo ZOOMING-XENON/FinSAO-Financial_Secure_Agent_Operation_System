@@ -357,7 +357,7 @@ svg.person { stroke: none; stroke-width: 0; }
 .svc span.i { width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center; background: var(--surface-2); color: var(--ink); }
 .svc.hot span.i { background: var(--brand-soft); color: var(--brand); }
 .svc span.l { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.svc-tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 4px 0 14px; }
+.svc-tabs { display: flex; gap: 8px; overflow-x: auto; margin: 4px -16px 14px; padding: 4px 16px 8px; scroll-padding: 0 16px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .svc-tabs::-webkit-scrollbar { display: none; }
 .svc-tabs button { flex: none; height: 34px; padding: 0 14px; border-radius: 999px; font-size: 13.5px; font-weight: 600; color: var(--muted); background: var(--surface); box-shadow: var(--shadow); }
 .svc-tabs button.on { background: var(--ink); color: var(--surface); }
