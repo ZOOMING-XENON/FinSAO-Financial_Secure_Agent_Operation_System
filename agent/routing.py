@@ -170,11 +170,85 @@ class RuleRouter:
                 reason="expense update requires verified planning",
                 required_slots=["expense_id"],
             )
-        if re.search(
-            r"(?:ispent|wesent|spent|ipaid|wepaid|paid|ibought|webought|bought|"
-            r"charged|cost|花了|我花了|消费|支付|买了)",
-            normalized,
-        ) and re.search(r"\d", normalized):
+        if (
+            re.search(r"(?:transfer|send|remit|pay(?!ment))", normalized)
+            and re.search(r"\d", normalized)
+            and not any(
+                word in normalized
+                for word in ("paid", "spent", "bought", "charged", "cost")
+            )
+        ):
+            return self._result(
+                Intent.TRANSFER,
+                route=Route.PLANNER,
+                complexity=3,
+                confidence=0.9,
+                reason="write operation requires verified planning",
+                required_slots=[
+                    "source_account_id",
+                    "destination_account_id",
+                    "amount",
+                    "currency",
+                ],
+            )
+        if any(
+            word in normalized
+            for word in (
+                "gotpaid",
+                "receivedsalary",
+                "salary",
+                "refund",
+                "reimbursement",
+                "income",
+                "工资",
+                "退款",
+                "报销",
+            )
+        ):
+            return self._result(
+                Intent.UNKNOWN,
+                route=Route.SAFE_FALLBACK,
+                complexity=2,
+                confidence=0.9,
+                reason="income and refund capture is not available yet",
+            )
+        spend_markers = (
+            "spent",
+            "spend",
+            "paid",
+            "bought",
+            "charged",
+            "cost",
+            "花了",
+            "我花了",
+            "消费",
+            "支付",
+            "买了",
+            "我买了",
+        )
+        query_markers = (
+            "howmuch",
+            "howmany",
+            "whatdid",
+            "didispend",
+            "show",
+            "list",
+            "summary",
+            "total",
+            "sum",
+            "where",
+            "which",
+            "when",
+            "多少",
+            "汇总",
+            "总额",
+            "显示",
+            "看看",
+            "查询",
+        )
+        if any(word in normalized for word in spend_markers) and not any(
+            word in normalized for word in query_markers
+        ):
             return self._result(
                 Intent.RECORD_EXPENSE,
                 route=Route.PLANNER,
@@ -183,22 +257,72 @@ class RuleRouter:
                 reason="completed spending requires tracked expense capture",
                 required_slots=["amount", "currency", "merchant"],
             )
-        if re.search(r"(?:was|cost|for)\d", normalized):
+        if any(
+            word in normalized
+            for word in ("add", "record", "log", "加了", "记一笔", "记录")
+        ) and re.search(r"\d", normalized):
             return self._result(
                 Intent.RECORD_EXPENSE,
                 route=Route.PLANNER,
                 complexity=2,
                 confidence=0.82,
+                reason="user asked to record an expense",
+                required_slots=["amount", "currency", "merchant"],
+            )
+        if re.match(r"^[a-z\u4e00-\u9fff][a-z0-9\u4e00-\u9fff&_-]*\d", normalized) and not any(
+            word in normalized
+            for word in (
+                "account",
+                "card",
+                "budget",
+                "transfer",
+                "balance",
+                "transaction",
+                "pay",
+                "send",
+                "id",
+                "转账",
+                "转给",
+                "汇款",
+                "账户",
+                "银行卡",
+                "预算",
+                "付款",
+            )
+        ):
+            return self._result(
+                Intent.RECORD_EXPENSE,
+                route=Route.PLANNER,
+                complexity=2,
+                confidence=0.78,
                 reason="amount-led expense statement",
                 required_slots=["amount", "currency", "merchant"],
             )
         if any(
             word in normalized
-            for word in ("expense", "expenses", "spending", "spent", "支出", "花费", "消费")
+            for word in (
+                "expense",
+                "expenses",
+                "spending",
+                "spent",
+                "spend",
+                "支出",
+                "花费",
+                "消费",
+            )
         ):
             if any(
                 word in normalized
-                for word in ("summary", "total", "sum", "汇总", "总额", "多少")
+                for word in (
+                    "summary",
+                    "total",
+                    "sum",
+                    "howmuch",
+                    "howmany",
+                    "汇总",
+                    "总额",
+                    "多少",
+                )
             ):
                 return self._result(
                     Intent.SUMMARIZE_EXPENSES,

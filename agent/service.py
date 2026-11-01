@@ -150,6 +150,11 @@ class AgentService:
                     ),
                 )
             slot_state = self._slots.extract(contextual_text, intent)
+        if (
+            intent.intent in {Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}
+            and "expense_id" not in slot_state.facts
+        ):
+            await self._resolve_expense_reference(context, slot_state)
         inferred = any(fact.source.value == "MODEL_INFERRED" for fact in slot_state.facts.values())
         if slot_state.missing or inferred:
             return await self._clarification_response(request, context, intent, slot_state)
@@ -367,6 +372,47 @@ class AgentService:
         user_text.append(request.message)
         return "\n".join(user_text), active
 
+    async def _resolve_expense_reference(
+        self, context: TrustedAgentContext, slots: SlotState
+    ) -> None:
+        reference = slots.facts.get("expense_ref")
+        if reference is None:
+            return
+        execution_context = ExecutionContext(
+            authenticated_user_id=context.authenticated_user_id,
+            session_id=context.session_id,
+            task_id=context.task_id,
+            trace_id=context.trace_id,
+        )
+        result = await self._gateway.execute(
+            tool_name="get_expenses",
+            arguments={
+                "merchant": str(reference.value),
+                "limit": 5,
+                "sort_by": "posted_at",
+                "sort_direction": "desc",
+            },
+            context=execution_context,
+        )
+        if result.status != ToolResultStatus.SUCCESS or result.data is None:
+            return
+        payload = result.data.model_dump(mode="json")
+        items = payload.get("items", [])
+        if not isinstance(items, list) or not items:
+            return
+        if len(items) > 1:
+            slots.facts["expense_candidates"] = SlotFact(
+                "expense_candidates", items, FactSource.TOOL_VERIFIED
+            )
+            return
+        expense_id = items[0].get("id") if isinstance(items[0], dict) else None
+        if not expense_id:
+            return
+        slots.facts["expense_id"] = SlotFact(
+            "expense_id", str(expense_id), FactSource.TOOL_VERIFIED
+        )
+        slots.missing = [name for name in slots.missing if name != "expense_id"]
+
     async def _clarification_response(
         self,
         request: AgentRequest,
@@ -377,6 +423,7 @@ class AgentService:
         labels = FIELD_LABELS[request.locale]
         input_types = {
             "category": "combobox",
+            "expense_id": "select",
             "month_date": "month",
             "limit_amount": "amount",
             "source_account_id": "select",
@@ -387,6 +434,20 @@ class AgentService:
             "target_amount": "amount",
         }
         options: dict[str, list[ClarificationOption]] = {}
+        candidates = slots.facts.get("expense_candidates")
+        if candidates is not None and isinstance(candidates.value, list):
+            options["expense_id"] = [
+                ClarificationOption(
+                    value=str(item.get("id")),
+                    label=(
+                        f'{item.get("merchant") or item.get("description") or "expense"} '
+                        f'{item.get("amount", "")} {item.get("currency", "")} '
+                        f'({item.get("posted_at", "")})'
+                    ),
+                )
+                for item in candidates.value
+                if isinstance(item, dict) and item.get("id")
+            ]
         if intent.intent == Intent.CREATE_BUDGET:
             options["category"] = [
                 ClarificationOption(
@@ -466,8 +527,21 @@ class AgentService:
                         slots.missing = [
                             name for name in slots.missing if name != "destination_account_id"
                         ]
-        field_names = list(dict.fromkeys([*intent.required_slots, *slots.facts.keys()]))
-        field_names = [name for name in field_names if name != "beneficiary_query"]
+        if intent.intent == Intent.RECORD_EXPENSE:
+            field_names = ["amount", "currency", "merchant"]
+            if "category" in slots.facts:
+                field_names.append("category")
+        elif intent.intent in {Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}:
+            field_names = ["expense_id", *(
+                name
+                for name in ("amount", "currency", "merchant", "category")
+                if name in slots.facts
+            )]
+        else:
+            field_names = list(
+                dict.fromkeys([*intent.required_slots, *slots.facts.keys()])
+            )
+            field_names = [name for name in field_names if name != "beneficiary_query"]
         fields = [
             ClarificationField(
                 name=name,
@@ -484,7 +558,17 @@ class AgentService:
         ]
         inferred_labels = [field.label for field in fields if field.inferred]
         missing_labels = [labels.get(name, name.replace("_", " ")) for name in slots.missing]
-        if intent.intent == Intent.TRANSFER:
+        if (
+            intent.intent == Intent.RECORD_EXPENSE
+            and "expense_ambiguity" in slots.facts
+        ):
+            message = (
+                "I found more than one possible expense. Please record them one at a "
+                "time, or provide one merchant for this entry."
+                if is_english(request.locale)
+                else "??????????????????????????????"
+            )
+        elif intent.intent == Intent.TRANSFER:
             message = (
                 "Choose a source account and a saved recipient. The form never asks "
                 "you to copy an internal UUID."
