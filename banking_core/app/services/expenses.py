@@ -122,7 +122,10 @@ class ExpenseService:
             if not merchant:
                 merchant = "unknown"
             by_merchant.setdefault(currency, {})
-            if merchant not in by_merchant[currency] and len(by_merchant[currency]) >= MAX_MERCHANT_GROUPS:
+            if (
+                merchant not in by_merchant[currency]
+                and len(by_merchant[currency]) >= MAX_MERCHANT_GROUPS
+            ):
                 merchant = "other"
             by_merchant[currency][merchant] = (
                 by_merchant[currency].get(merchant, Decimal("0.00")) + amount

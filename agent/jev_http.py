@@ -186,7 +186,7 @@ class HttpJevAdapter:
             for step in plan.steps
             if step.tool_call is not None
         ]
-        state = {"user_text": text, "tools": tools, "goal": plan.goal}
+        state = {"user_text": text, "tools": tools}
         questions = {
             "consistent": {
                 "type": "noul",

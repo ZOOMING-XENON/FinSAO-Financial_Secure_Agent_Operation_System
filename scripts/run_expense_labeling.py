@@ -12,8 +12,7 @@ from agent.config import get_agent_settings
 from agent.jev_http import HttpJevAdapter
 from agent.labeling import ExpenseLabelingWorker
 from agent.privacy_broker import PrivacyBroker
-from agent_tools.client import BankingHttpClient
-from agent_tools.client import BankingClientError
+from agent_tools.client import BankingClientError, BankingHttpClient
 from agent_tools.contracts import ExecutionContext
 
 
@@ -23,6 +22,10 @@ class LabelingTransaction(BaseModel):
     category: str | None = None
     category_source: str | None = None
     category_version: str | None = None
+
+
+class EmptyResponse(BaseModel):
+    pass
 
 
 class LabelWriteResponse(BaseModel):
@@ -46,6 +49,8 @@ class LabelingAuthenticator:
 
 async def run(batch_size: int, delay: float) -> None:
     settings = get_agent_settings()
+    if not settings.expense_labeling_jev_enabled:
+        raise SystemExit("EXPENSE_LABELING_JEV_ENABLED is false")
     if settings.jev_api_key is None:
         raise SystemExit("JEV_API_KEY is required for labeling")
     adapter = HttpJevAdapter(
@@ -80,7 +85,7 @@ async def run(batch_size: int, delay: float) -> None:
                     "POST",
                     f"/internal/expense-labeling/transactions/{item.id}/attempt",
                     context,
-                    None,
+                    EmptyResponse,
                     json={"policy_version": "jev-label-v1", "succeeded": False},
                     mutation=True,
                 )
@@ -106,7 +111,7 @@ async def run(batch_size: int, delay: float) -> None:
                     "POST",
                     f"/internal/expense-labeling/transactions/{item.id}/attempt",
                     context,
-                    None,
+                    EmptyResponse,
                     json={"policy_version": "jev-label-v1", "succeeded": False},
                     mutation=True,
                 )
@@ -116,12 +121,23 @@ async def run(batch_size: int, delay: float) -> None:
         await adapter.close()
 
 
+async def run_forever(batch_size: int, delay: float, interval: float) -> None:
+    while True:
+        await run(batch_size, delay)
+        await asyncio.sleep(interval)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument("--delay", type=float, default=0.0)
+    parser.add_argument("--loop", action="store_true")
+    parser.add_argument("--interval", type=float, default=60.0)
     args = parser.parse_args()
-    asyncio.run(run(args.batch_size, args.delay))
+    if args.loop:
+        asyncio.run(run_forever(args.batch_size, args.delay, args.interval))
+    else:
+        asyncio.run(run(args.batch_size, args.delay))
 
 
 if __name__ == "__main__":

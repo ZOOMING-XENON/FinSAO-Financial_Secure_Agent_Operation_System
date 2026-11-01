@@ -162,3 +162,43 @@ async def test_plan_reviewer_veto_blocks_execution() -> None:
     assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
     assert gateway.calls == []
     assert reviewer.calls
+
+@pytest.mark.asyncio
+async def test_jev_selected_intent_reaches_llm_planner() -> None:
+    from uuid import uuid4
+
+    from agent.contracts import AgentRequest, TaskPlan
+    from agent.hybrid import BaselinePlanner, HybridPlanner
+    from agent.providers import FakeModelProvider
+    from agent.routing import IntentResult
+
+    candidate = TaskPlan(
+        goal="list accounts",
+        steps=[
+            {
+                "step_id": "list_accounts",
+                "purpose": "list",
+                "tool_call": {"tool_name": "get_accounts", "arguments": {}},
+                "argument_sources": {},
+            }
+        ],
+    )
+    provider = FakeModelProvider(candidate)
+    planner = HybridPlanner(BaselinePlanner(), provider)
+    intent = IntentResult(
+        intent=Intent.LIST_ACCOUNTS,
+        complexity=3,
+        confidence=0.95,
+        route=Route.PLANNER,
+        reason="jev:jev-test",
+    )
+    request = AgentRequest(session_id=uuid4(), message="show my accounts")
+    plan = await planner.create(
+        intent,
+        __import__("agent.context", fromlist=["SlotTracker"]).SlotTracker().extract(
+            request.message, intent
+        ),
+        request=request,
+        allowed_tools=[],
+    )
+    assert plan.goal == "list accounts"
