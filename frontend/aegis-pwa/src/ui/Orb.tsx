@@ -43,16 +43,27 @@ export function VoiceOrb({ size, level, active }: { size: number; level?: OrbLev
       const target = activeRef.current ? 0.14 + Math.min(1, (level?.current ?? 0) * 1.6) * 0.55 : 0.05;
       amp += (target - amp) * 0.12;
       ctx.clearRect(0, 0, size, size);
-      const base = size * (activeRef.current ? 0.3 : 0.32) * (1 + amp * 0.25);
+      const base = size * (activeRef.current ? 0.3 : 0.27) * (1 + amp * 0.25);
       // soft glow
       const glow = ctx.createRadialGradient(c, c, base * 0.4, c, c, size * 0.5);
       glow.addColorStop(0, `rgba(140, 110, 255, ${0.28 + amp * 0.4})`);
       glow.addColorStop(1, 'rgba(140, 110, 255, 0)');
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, size, size);
-      // Additive blending only on the dark voice screen; on light pages it would wash out to white.
-      ctx.globalCompositeOperation = activeRef.current ? 'lighter' : 'source-over';
-      const live = activeRef.current;
+      // On light pages the orb sits in its own night-purple disc, so it looks the same as on the
+      // voice screen (additive colours need a dark background, or they wash out to pale blue).
+      if (!activeRef.current) {
+        const disc = ctx.createRadialGradient(c, c * 0.9, 0, c, c, size * 0.47);
+        disc.addColorStop(0, '#2b1d6e');
+        disc.addColorStop(0.65, '#160f36');
+        disc.addColorStop(1, '#0d0a20');
+        ctx.fillStyle = disc;
+        ctx.beginPath();
+        ctx.arc(c, c, size * 0.47, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'lighter';
+      const live = true;
       for (const L of LAYERS) {
         const rot = t * L.speed + L.phase;
         // Each colour orbits a little off-centre so the hues stay distinct instead of mixing to grey.

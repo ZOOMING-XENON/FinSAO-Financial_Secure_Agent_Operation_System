@@ -3,51 +3,67 @@ import { api, uid } from '../core/api';
 import { CATEGORIES, type Category, type Transaction } from '../core/types';
 import { categoryKey, direction, formatDate } from '../core/format';
 import { formatMoney, isValidAmount, normalizeAmount, toCents } from '../core/money';
-import { recognizeReceipt, takePendingReceipt } from '../core/recognition';
+import { recognizeReceipt, takePendingReceipts } from '../core/recognition';
 import { addLedgerEntry, ledgerCatFor } from '../core/ledger';
 import { go, useApp, useLoad } from '../app/state';
 import { Amount, Icon, Sheet, Skeleton } from '../ui/kit';
 import { loadAccounts, loadRecent } from './Home';
 
+interface Found {
+  id: string;
+  photo: number;
+  merchant: string;
+  amount: string;
+  date: string | null;
+  cat: Category;
+  kind: 'out' | 'in';
+  include: boolean;
+}
+
 export function Track() {
   const { t, locale, toast, errorText, refresh } = useApp();
   const recent = useLoad(async () => (await loadRecent(await loadAccounts(), 100)).filter(x => direction(x) === 'out'));
-  const [photo, setPhoto] = useState<string | null>(null);
+  const [photos, setPhotos] = useState<string[]>([]);
   const [state, setState] = useState<'idle' | 'reading' | 'done' | 'failed'>('idle');
   const [progress, setProgress] = useState(0);
-  const [merchant, setMerchant] = useState('');
-  const [amount, setAmount] = useState('');
-  const [date, setDate] = useState<string | null>(null);
-  const [cat, setCat] = useState<Category>('UNKNOWN');
+  const [reading, setReading] = useState({ n: 0, of: 0 });
+  const [items, setItems] = useState<Found[]>([]);
   const [editing, setEditing] = useState<Transaction | null>(null);
-  const photoRef = useRef<string | null>(null);
+  const urls = useRef<string[]>([]);
 
-  const onFile = async (file: File | undefined | null) => {
-    if (!file) return;
-    if (photoRef.current) URL.revokeObjectURL(photoRef.current);
-    photoRef.current = URL.createObjectURL(file);
-    setPhoto(photoRef.current);
+  const onFiles = async (files: File[]) => {
+    if (!files.length) return;
+    urls.current.forEach(u => URL.revokeObjectURL(u));
+    urls.current = files.map(f => URL.createObjectURL(f));
+    setPhotos(urls.current);
+    setItems([]);
     setState('reading');
-    setProgress(0);
-    try {
-      const g = await recognizeReceipt(file, p => setProgress(Math.round(p * 100)));
-      setMerchant(g.merchant);
-      setAmount(g.amount ?? '');
-      setDate(g.date);
-      setCat(g.category);
-      setState(g.amount ? 'done' : 'failed');
-    } catch {
-      setState('failed');
+    const found: Found[] = [];
+    for (let i = 0; i < files.length; i++) {
+      setReading({ n: i + 1, of: files.length });
+      setProgress(0);
+      try {
+        const guesses = await recognizeReceipt(files[i], p => setProgress(Math.round(p * 100)));
+        for (const g of guesses) {
+          found.push({ id: uid(), photo: i, merchant: g.merchant, amount: g.amount ?? '', date: g.date, cat: g.category, kind: g.kind, include: g.kind === 'out' });
+        }
+      } catch {
+        /* unreadable picture: the others still count */
+      }
+      setItems([...found]);
     }
+    if (!found.length) found.push({ id: uid(), photo: 0, merchant: '', amount: '', date: null, cat: 'UNKNOWN', kind: 'out', include: true });
+    setItems(found);
+    setState(found.some(x => x.amount) ? 'done' : 'failed');
   };
 
   useEffect(() => {
-    onFile(takePendingReceipt());
-    return () => {
-      if (photoRef.current) URL.revokeObjectURL(photoRef.current);
-    };
+    onFiles(takePendingReceipts());
+    return () => urls.current.forEach(u => URL.revokeObjectURL(u));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const patch = (id: string, change: Partial<Found>) => setItems(list => list.map(x => (x.id === id ? { ...x, ...change } : x)));
 
   const setCategory = async (tx: Transaction, category: Category) => {
     try {
@@ -61,15 +77,18 @@ export function Track() {
     }
   };
 
+  const chosen = items.filter(x => x.include && isValidAmount(x.amount));
   const saveCash = () => {
-    if (!isValidAmount(amount)) return toast(t('pay.invalidAmount'));
-    addLedgerEntry({ id: uid(), kind: 'out', cat: ledgerCatFor(cat), cents: normalizeAmount(amount), note: merchant.trim(), at: date ? `${date}T12:00:00` : new Date().toISOString() });
-    toast(t('track.savedCash'));
+    if (!chosen.length) return toast(t('pay.invalidAmount'));
+    for (const x of chosen) {
+      const cat = x.kind === 'in' ? (/工资|薪|salary|payroll/i.test(x.merchant) ? 'salary' : 'other') : ledgerCatFor(x.cat);
+      addLedgerEntry({ id: uid(), kind: x.kind, cat, cents: normalizeAmount(x.amount), note: x.merchant.trim(), at: x.date ? `${x.date}T12:00:00` : new Date().toISOString() });
+    }
+    toast(chosen.length > 1 ? t('track.savedMany', { n: chosen.length }) : t('track.savedCash'));
     go('ledger');
   };
 
-  const valid = isValidAmount(amount);
-  const matches = valid ? (recent.data ?? []).filter(x => toCents(x.amount) === toCents(amount)) : [];
+  const matchesFor = (x: Found) => (x.kind === 'out' && isValidAmount(x.amount) ? (recent.data ?? []).filter(tx => toCents(tx.amount) === toCents(x.amount)) : []);
   const needs = (recent.data ?? []).filter(x => !x.category || categoryKey(x.category) === 'UNKNOWN');
   const rest = (recent.data ?? []).filter(x => !needs.includes(x)).slice(0, 15);
 
@@ -113,71 +132,102 @@ export function Track() {
         <span className="sq">
           <Icon name="i-scan" />
         </span>
-        <b>{photo ? t('track.another') : t('track.scan')}</b>
-        <span className="mut small">{t('track.scanHint')}</span>
-        <input id="receipt" type="file" accept="image/*" capture="environment" onChange={e => onFile(e.target.files?.[0])} />
+        <b>{photos.length ? t('track.another') : t('track.scan')}</b>
+        <span className="mut small">{t('track.pickHint')}</span>
+        <input id="receipt" type="file" accept="image/*" multiple onChange={e => onFiles([...(e.target.files ?? [])])} />
       </label>
 
-      {photo && (
+      {photos.length > 0 && (
+        <div className="receipt-thumbs">
+          {photos.map((src, i) => (
+            <img key={src} src={src} alt={t('track.fromPhoto', { n: i + 1 })} />
+          ))}
+        </div>
+      )}
+
+      {state === 'reading' && (
         <section className="card" style={{ marginTop: 14 }}>
-          <img className="receipt-img" src={photo} alt={t('track.photo')} />
-          {state === 'reading' && (
-            <>
-              <p className="mut small">{t('track.reading', { pct: progress })}</p>
-              <div className="bar">
-                <i style={{ width: progress + '%' }} />
-              </div>
-            </>
+          <p className="mut small" style={{ marginTop: 0 }}>
+            {reading.of > 1 ? `${t('track.fromPhoto', { n: reading.n })} / ${reading.of} · ` : ''}
+            {t('track.reading', { pct: progress })}
+          </p>
+          <div className="bar">
+            <i style={{ width: progress + '%' }} />
+          </div>
+        </section>
+      )}
+
+      {(state === 'done' || state === 'failed') && (
+        <>
+          {state === 'failed' && <p className="small" style={{ color: 'var(--yellow)', margin: '12px 4px 0' }}>{t('track.failed')}</p>}
+          {items.length > 1 && (
+            <div className="sec-h" style={{ marginTop: 16 }}>
+              <h2>{t('track.found', { n: items.length })}</h2>
+            </div>
           )}
-          {state === 'failed' && <p className="small" style={{ color: 'var(--yellow)' }}>{t('track.failed')}</p>}
-          {(state === 'done' || state === 'failed') && (
-            <>
-              <label className="f" htmlFor="rc-m">
-                {t('track.merchant')}
-              </label>
-              <input id="rc-m" className="input" value={merchant} onChange={e => setMerchant(e.target.value)} />
-              <div className="btn-row">
-                <div style={{ flex: 1 }}>
-                  <label className="f" htmlFor="rc-a">
-                    {t('track.amount')}
+          {items.map(x => {
+            const matches = matchesFor(x);
+            return (
+              <section className={'card found' + (x.include ? '' : ' off')} key={x.id} style={{ marginTop: 12 }}>
+                {items.length > 1 && (
+                  <label className="found-top">
+                    <input type="checkbox" checked={x.include} onChange={e => patch(x.id, { include: e.target.checked })} />
+                    <span>{t('track.include')}</span>
+                    <span className="spacer" />
+                    {photos.length > 1 && <span className="mut small">{t('track.fromPhoto', { n: x.photo + 1 })}</span>}
+                    <span className={'badge ' + (x.kind === 'in' ? 'GREEN' : 'INFO')}>{t(x.kind === 'in' ? 'led.income' : 'led.expense')}</span>
                   </label>
-                  <input id="rc-a" className="input" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label className="f">{t('track.date')}</label>
-                  <div className="input" style={{ display: 'flex', alignItems: 'center' }}>
-                    {date ? formatDate(date, locale, { year: 'numeric', month: 'short', day: 'numeric' }) : t('track.today')}
+                )}
+                <label className="f" htmlFor={'m' + x.id}>
+                  {t('track.merchant')}
+                </label>
+                <input id={'m' + x.id} className="input" value={x.merchant} onChange={e => patch(x.id, { merchant: e.target.value })} />
+                <div className="btn-row">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <label className="f" htmlFor={'a' + x.id}>
+                      {t('track.amount')}
+                    </label>
+                    <input id={'a' + x.id} className="input" inputMode="decimal" value={x.amount} onChange={e => patch(x.id, { amount: e.target.value })} placeholder="0.00" />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <label className="f" htmlFor={'d' + x.id}>
+                      {t('track.date')}
+                    </label>
+                    <input id={'d' + x.id} className="input" type="date" value={x.date ?? ''} onChange={e => patch(x.id, { date: e.target.value || null })} />
                   </div>
                 </div>
-              </div>
-              <label className="f">{t('track.category')}</label>
-              <div className="cat-pick">
-                {CATEGORIES.map(c => (
-                  <button key={c} className={cat === c ? 'on' : ''} onClick={() => setCat(c)} aria-pressed={cat === c}>
-                    <span className="ico">
-                      <Icon name={'c-' + c} />
-                    </span>
-                    {t(`cat.${c}`)}
-                  </button>
-                ))}
-              </div>
-              <label className="f">{t('track.match')}</label>
-              {valid && matches.length === 0 && <p className="mut small">{t('track.noMatch')}</p>}
-              {matches.map(x =>
-                row(
-                  x,
-                  <button className="btn primary sm" onClick={() => setCategory(x, cat)}>
-                    {t('track.use')}
-                  </button>,
-                ),
-              )}
-              <button className="btn dark" style={{ marginTop: 12 }} onClick={saveCash} disabled={!valid}>
-                <Icon name="i-book" />
-                {t('track.saveCash')}
-              </button>
-            </>
-          )}
-        </section>
+                {x.kind === 'out' && (
+                  <>
+                    <label className="f">{t('track.category')}</label>
+                    <div className="cat-pick">
+                      {CATEGORIES.map(c => (
+                        <button key={c} className={x.cat === c ? 'on' : ''} onClick={() => patch(x.id, { cat: c })} aria-pressed={x.cat === c}>
+                          <span className="ico">
+                            <Icon name={'c-' + c} />
+                          </span>
+                          {t(`cat.${c}`)}
+                        </button>
+                      ))}
+                    </div>
+                    {matches.length > 0 && <label className="f">{t('track.match')}</label>}
+                    {matches.map(tx =>
+                      row(
+                        tx,
+                        <button className="btn primary sm" onClick={() => setCategory(tx, x.cat)}>
+                          {t('track.use')}
+                        </button>,
+                      ),
+                    )}
+                  </>
+                )}
+              </section>
+            );
+          })}
+          <button className="btn dark" style={{ marginTop: 14 }} onClick={saveCash} disabled={!chosen.length}>
+            <Icon name="i-book" />
+            {chosen.length > 1 ? t('track.saveAll', { n: chosen.length }) : t('track.saveCash')}
+          </button>
+        </>
       )}
 
       {needs.length > 0 && (
