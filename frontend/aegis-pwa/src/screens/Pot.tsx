@@ -1,10 +1,10 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, uid } from '../core/api';
 import type { SavingsContribution, SavingsPot } from '../core/types';
 import { formatDate } from '../core/format';
 import { formatMoney, fromCents, isValidAmount, normalizeAmount, toCents } from '../core/money';
 import { potPlan } from '../core/insights';
-import { celebrated, markCelebrated, POT_EMOJI, POT_TEMPLATES, POT_THEMES, potLook, savePotLook, themeBg, type PotLook } from '../core/potstyle';
+import { celebrated, challengeDue, challengeTarget, markCelebrated, PLAN_TYPES, POT_ICONS, POT_TEMPLATES, POT_THEMES, potLook, savePotLook, themeBg, themeFg, type PlanType, type PotLook } from '../core/potstyle';
 import { go, useApp, useLoad } from '../app/state';
 import { Icon, Sheet, Skeleton } from '../ui/kit';
 import { useShield } from '../ui/Shield';
@@ -48,7 +48,7 @@ export function PotDetail({ id }: { id: string }) {
     );
   }
   const p = pot.data;
-  const look = p ? potLook(p.id, p.name) : { emoji: '💰', theme: 'violet' as const };
+  const look = p ? potLook(p.id, p.name) : { icon: 'p-coins', theme: 'purple' as const } as PotLook;
   const plan = p ? potPlan(p) : null;
 
   const afterSave = (before: number, after: number) => {
@@ -80,7 +80,7 @@ export function PotDetail({ id }: { id: string }) {
 
   return (
     <>
-      <section className="pot-hero2" style={{ background: themeBg(look.theme) }} key={lookVer}>
+      <section className="pot-hero2" style={{ background: themeBg(look.theme), color: themeFg(look.theme), boxShadow: look.theme === 'white' ? 'inset 0 -1px 0 var(--line)' : undefined }} key={lookVer}>
         <a className="icon-btn back glass" href="#/wealth" aria-label={t('common.back')}>
           <Icon name="i-back" />
         </a>
@@ -88,7 +88,9 @@ export function PotDetail({ id }: { id: string }) {
           <Icon name="i-spark" />
         </button>
         <Ring pct={plan?.pct ?? 0} size={150} stroke={10}>
-          <span className="hero-emoji">{look.emoji}</span>
+          <span className="hero-emoji">
+            <Icon name={look.icon} />
+          </span>
         </Ring>
         <div className="n">{p?.name ?? '…'}</div>
         <div className="amt big">{p ? m$(toCents(p.saved_amount)) : '…'}</div>
@@ -99,7 +101,7 @@ export function PotDetail({ id }: { id: string }) {
         <div className="milestones" aria-label={t('pot.milestones')}>
           {MILESTONES.map(ms => (
             <div key={ms} className={'ms' + ((plan?.pct ?? 0) >= ms ? ' hit' : '')}>
-              <span>{(plan?.pct ?? 0) >= ms ? <Icon name="i-check" /> : ms === 100 ? '🏁' : ''}</span>
+              <span>{(plan?.pct ?? 0) >= ms ? <Icon name="i-check" /> : ''}</span>
               <small>{ms}%</small>
             </div>
           ))}
@@ -118,6 +120,26 @@ export function PotDetail({ id }: { id: string }) {
                 {t('pot.add')}
               </button>
             </div>
+
+            {(() => {
+              const due = look.plan ? challengeDue(look.plan.type, look.plan.start, look.plan.step, p.created_at) : null;
+              return due && !plan.reached ? (
+                <section className="card plan-due">
+                  <div className="plan-head">
+                    <span className="plan-ico">
+                      <Icon name="i-cal" />
+                    </span>
+                    <div style={{ flex: 1 }}>
+                      <b>{t(look.plan!.type === 'week52' ? 'plan.dueWeek' : 'plan.dueDay', { n: due.n, amount: formatMoney(due.amount) })}</b>
+                      <span className="mut small">{t(`plan.${look.plan!.type}` as 'plan.week52')}</span>
+                    </div>
+                    <button className="btn primary sm" onClick={() => setAdd(due.amount)}>
+                      {t('pot.add')}
+                    </button>
+                  </div>
+                </section>
+              ) : null;
+            })()}
 
             <section className={'card plan ' + (plan.reached ? 'done' : plan.gap >= 0n ? 'ahead' : 'behind')}>
               <div className="plan-head">
@@ -213,11 +235,13 @@ export function PotDetail({ id }: { id: string }) {
       </Sheet>
       <Sheet open={goal} onClose={() => setGoal(false)} label={t('pot.goalTitle')}>
         <div className="center goal-done">
-          <span className="goal-emoji">{look.emoji}</span>
+          <span className="goal-emoji">
+            <Icon name="i-check" />
+          </span>
           <h3>{t('pot.goalTitle')}</h3>
           <p className="sub">{t('pot.goalBody', { name: p?.name ?? '', amount: p ? m$(toCents(p.target_amount)) : '' })}</p>
           <button className="btn primary" onClick={() => (setGoal(false), celebrate(true))}>
-            🎉 {t('pot.goalAgain')}
+            {t('pot.goalAgain')}
           </button>
           <button className="btn" onClick={() => setGoal(false)}>
             {t('pay.done')}
@@ -363,14 +387,14 @@ function LookSheet({ initial, onClose, onSave }: { initial: PotLook; onClose: ()
   return (
     <Sheet open onClose={onClose} label={t('pot.customize')}>
       <h3>{t('pot.customize')}</h3>
-      <div className="look-preview" style={{ background: themeBg(look.theme) }}>
-        {look.emoji}
+      <div className="look-preview" style={{ background: themeBg(look.theme), color: themeFg(look.theme), boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+        <Icon name={look.icon} />
       </div>
       <label className="f">{t('pot.icon')}</label>
       <div className="emoji-pick">
-        {POT_EMOJI.map(e => (
-          <button key={e} className={look.emoji === e ? 'on' : ''} onClick={() => setLook({ ...look, emoji: e })}>
-            {e}
+        {POT_ICONS.map(e => (
+          <button key={e} className={look.icon === e ? 'on' : ''} onClick={() => setLook({ ...look, icon: e })} aria-label={e}>
+            <Icon name={e} />
           </button>
         ))}
       </div>
@@ -387,12 +411,35 @@ function LookSheet({ initial, onClose, onSave }: { initial: PotLook; onClose: ()
   );
 }
 
-export function NewPot() {
+export function NewPot({ initialPlan }: { initialPlan?: PlanType }) {
   const { t, errorText, refresh } = useApp();
   const [tpl, setTpl] = useState<(typeof POT_TEMPLATES)[number] | null>(null);
   const [name, setName] = useState('');
   const [target, setTarget] = useState('');
-  const [look, setLook] = useState<PotLook>({ emoji: '💰', theme: 'violet' });
+  const [look, setLook] = useState<PotLook>({ icon: 'p-coins', theme: 'purple' });
+  const [planType, setPlanType] = useState<PlanType>('fixed');
+  const [start, setStart] = useState('10');
+  const [step, setStep] = useState('10');
+  const challenge = planType === 'week52' || planType === 'day365';
+  const started = useRef(false);
+  useEffect(() => {
+    if (initialPlan && !started.current) {
+      started.current = true;
+      pickPlan(initialPlan);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPlan]);
+  const pickPlan = (type: PlanType) => {
+    setPlanType(type);
+    if (type === 'week52' || type === 'day365') {
+      const d = new Date();
+      d.setDate(d.getDate() + (type === 'week52' ? 364 : 365));
+      setDate(d.toISOString().slice(0, 10));
+      setStart(type === 'week52' ? '10' : '1');
+      setStep(type === 'week52' ? '10' : '1');
+      if (!name.trim()) setName(t(`plan.${type}` as 'plan.week52'));
+    }
+  };
   const [date, setDate] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() + 6);
@@ -402,28 +449,28 @@ export function NewPot() {
   const [busy, setBusy] = useState(false);
   const key = useRef('pot-' + uid());
   const months = Math.max(1, Math.round((Date.parse(date) - Date.now()) / (30.4 * 86_400_000)));
-  const perMonth = isValidAmount(target) ? m$((toCents(target) + BigInt(months) - 1n) / BigInt(months)) : null;
 
   const pick = (x: (typeof POT_TEMPLATES)[number]) => {
     setTpl(x);
     setName(t(`pot.tpl.${x.key}` as 'pot.tpl.travel'));
     setTarget(x.target);
-    setLook({ emoji: x.emoji, theme: x.theme });
+    setLook({ icon: x.icon, theme: x.theme });
   };
 
+  const goalAmount = challenge ? challengeTarget(planType, isValidAmount(start) ? start : '0', isValidAmount(step) ? step : '0') ?? '0' : target;
   const create = async () => {
     if (!name.trim()) return setMsg(t('err.VALIDATION_ERROR'));
-    if (!isValidAmount(target)) return setMsg(t('pay.invalidAmount'));
+    if (!isValidAmount(goalAmount)) return setMsg(t('pay.invalidAmount'));
     setBusy(true);
     try {
       const pot = await api.post<SavingsPot>('/savings-pots', {
         name: name.trim(),
-        target_amount: normalizeAmount(target),
+        target_amount: normalizeAmount(goalAmount),
         currency: 'CNY',
         target_date: date,
         idempotency_key: key.current,
       });
-      savePotLook(pot.id, look);
+      savePotLook(pot.id, challenge ? { ...look, plan: { type: planType, start: normalizeAmount(start), step: normalizeAmount(step) } } : look);
       refresh();
       celebrate(false);
       go('pot/' + pot.id);
@@ -442,33 +489,74 @@ export function NewPot() {
         <h2>{t('pot.newTitle')}</h2>
         <span style={{ width: 40 }} />
       </div>
-      <div className="look-preview big" style={{ background: themeBg(look.theme) }}>
-        <span>{look.emoji}</span>
+      <div className="look-preview big" style={{ background: themeBg(look.theme), color: themeFg(look.theme), boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+        <Icon name={look.icon} />
         <b>{name || t('pot.name')}</b>
-        <small>{target ? m$(toCents(isValidAmount(target) ? target : '0')) : '¥0'}</small>
+        <small>{isValidAmount(goalAmount) ? m$(toCents(goalAmount)) : '¥0'}</small>
       </div>
-      <label className="f">{t('pot.pickTemplate')}</label>
-      <div className="tpl-grid">
-        {POT_TEMPLATES.map(x => (
-          <button key={x.key} className={tpl?.key === x.key ? 'on' : ''} onClick={() => pick(x)}>
-            <span>{x.emoji}</span>
-            {t(`pot.tpl.${x.key}` as 'pot.tpl.travel')}
+      <label className="f">{t('plan.type')}</label>
+      <div className="plan-types">
+        {PLAN_TYPES.map(type => (
+          <button key={type} className={'plan-type' + (planType === type ? ' on' : '')} onClick={() => pickPlan(type)} aria-pressed={planType === type}>
+            <span className="pi">{type === 'week52' ? '52' : type === 'day365' ? '365' : <Icon name={type === 'fixed' ? 'i-target' : 'i-sliders'} />}</span>
+            <b>{t(`plan.${type}` as 'plan.week52')}</b>
+            <small>{t(`plan.${type}D` as 'plan.week52D')}</small>
           </button>
         ))}
       </div>
+      {!challenge && (
+        <>
+          <label className="f">{t('pot.pickTemplate')}</label>
+          <div className="tpl-grid">
+            {POT_TEMPLATES.map(x => (
+              <button key={x.key} className={tpl?.key === x.key ? 'on' : ''} onClick={() => pick(x)}>
+                <span>
+                  <Icon name={x.icon} />
+                </span>
+                {t(`pot.tpl.${x.key}` as 'pot.tpl.travel')}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       <label className="f" htmlFor="np-n">
         {t('pot.name')}
       </label>
       <input id="np-n" className="input" maxLength={120} value={name} onChange={e => setName(e.target.value)} />
-      <label className="f" htmlFor="np-t">
-        {t('pot.target')}
-      </label>
-      <input id="np-t" className="input" inputMode="decimal" value={target} onChange={e => setTarget(e.target.value)} />
+      {challenge ? (
+        <div className="btn-row">
+          <div style={{ flex: 1 }}>
+            <label className="f" htmlFor="np-s">
+              {t('plan.first')}
+            </label>
+            <input id="np-s" className="input" inputMode="decimal" value={start} onChange={e => setStart(e.target.value)} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label className="f" htmlFor="np-i">
+              {t('plan.step')}
+            </label>
+            <input id="np-i" className="input" inputMode="decimal" value={step} onChange={e => setStep(e.target.value)} />
+          </div>
+        </div>
+      ) : (
+        <>
+          <label className="f" htmlFor="np-t">
+            {t('pot.target')}
+          </label>
+          <input id="np-t" className="input" inputMode="decimal" value={target} onChange={e => setTarget(e.target.value)} />
+        </>
+      )}
       <label className="f" htmlFor="np-d">
         {t('pot.date')}
       </label>
-      <input id="np-d" className="input" type="date" value={date} min={new Date().toISOString().slice(0, 10)} onChange={e => setDate(e.target.value)} />
-      {perMonth && <p className="plan-preview">{t('pot.planPreview', { amount: perMonth, n: months })}</p>}
+      <input id="np-d" className="input" type="date" value={date} min={new Date().toISOString().slice(0, 10)} onChange={e => setDate(e.target.value)} disabled={challenge} />
+      {isValidAmount(goalAmount) && (
+        <p className="plan-preview">
+          {challenge
+            ? t('plan.preview', { amount: m$(toCents(goalAmount)), n: planType === 'week52' ? 52 : 365 })
+            : t('pot.planPreview', { amount: m$((toCents(goalAmount) + BigInt(months) - 1n) / BigInt(months)), n: months })}
+        </p>
+      )}
       <label className="f">{t('pot.color')}</label>
       <div className="theme-pick">
         {POT_THEMES.map(th => (

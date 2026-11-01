@@ -71,7 +71,7 @@ export function Aegis() {
     const next = voiceLang === 'zh-CN' ? 'en-US' : 'zh-CN';
     session.voiceLang = next;
     setVoiceLang(next);
-    if (listening) recRef.current?.stop();
+    if (voiceOpen) void startVoiceCapture(next);
   };
   const endRef = useRef<HTMLDivElement>(null);
   const recRef = useRef<{ stop: () => void } | null>(null);
@@ -80,6 +80,9 @@ export function Aegis() {
   const heard = useRef('');
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [voiceText, setVoiceText] = useState('');
+  const [voiceError, setVoiceError] = useState('');
+  const captureId = useRef(0);
+  const recognitionFailed = useRef(false);
   useEffect(() => () => {
     recRef.current?.stop();
     stopMic.current();
@@ -272,12 +275,97 @@ export function Aegis() {
     }
   }
 
+  const recognitionError = (code: string) => {
+    if (code === 'not-allowed' || code === 'service-not-allowed') return t('aegis.micDenied');
+    if (code === 'audio-capture') return t('aegis.micUnavailable');
+    if (code === 'network') return t('aegis.voiceNetwork');
+    return t('aegis.noSpeech');
+  };
+
+  const startVoiceCapture = async (captureLang = voiceLang) => {
+    const id = ++captureId.current;
+    const previous = recRef.current;
+    recRef.current = null;
+    previous?.stop();
+    stopMic.current();
+    stopMic.current = () => undefined;
+    heard.current = '';
+    recognitionFailed.current = false;
+    setVoiceText('');
+    setVoiceError('');
+    setListening(true);
+
+    const mic = await startMicLevel(level);
+    if (id !== captureId.current) {
+      mic.stop();
+      return;
+    }
+    if (mic.error) {
+      setListening(false);
+      setVoiceError(t(mic.error === 'denied' ? 'aegis.micDenied' : 'aegis.micUnavailable'));
+      return;
+    }
+    stopMic.current = mic.stop;
+
+    const w = window as unknown as Record<string, unknown>;
+    const Rec = (w.SpeechRecognition || w.webkitSpeechRecognition) as (new () => SpeechRec) | undefined;
+    if (!Rec) {
+      stopMic.current();
+      stopMic.current = () => undefined;
+      setListening(false);
+      setVoiceError(t('aegis.noVoice'));
+      return;
+    }
+    const rec = new Rec();
+    rec.lang = captureLang;
+    rec.interimResults = true;
+    rec.onresult = e => {
+      if (id !== captureId.current) return;
+      heard.current = Array.from(e.results).map(r => r[0].transcript).join('');
+      setVoiceText(heard.current);
+      if (level.current < 0.25) level.current = 0.35;
+    };
+    rec.onerror = e => {
+      if (id !== captureId.current || e.error === 'aborted') return;
+      recognitionFailed.current = true;
+      stopMic.current();
+      stopMic.current = () => undefined;
+      setListening(false);
+      setVoiceError(recognitionError(e.error));
+    };
+    rec.onend = () => {
+      if (id !== captureId.current) return;
+      setListening(false);
+      if (heard.current.trim()) closeVoice(true);
+      else if (!recognitionFailed.current) {
+        stopMic.current();
+        stopMic.current = () => undefined;
+        setVoiceError(t('aegis.noSpeech'));
+      }
+    };
+    recRef.current = rec;
+    try {
+      rec.start();
+    } catch {
+      recognitionFailed.current = true;
+      stopMic.current();
+      stopMic.current = () => undefined;
+      setListening(false);
+      setVoiceError(t('aegis.micUnavailable'));
+    }
+  };
+
   // Voice mode: full-screen orb that reacts to the mic; what you say is sent when you stop.
   const closeVoice = (sendIt: boolean) => {
-    recRef.current?.stop();
+    captureId.current += 1;
+    const rec = recRef.current;
+    recRef.current = null;
+    rec?.stop();
     stopMic.current();
+    stopMic.current = () => undefined;
     setListening(false);
     setVoiceOpen(false);
+    setVoiceError('');
     const said = heard.current.trim();
     heard.current = '';
     setVoiceText('');
@@ -294,24 +382,9 @@ export function Aegis() {
     haptic(10);
     heard.current = '';
     setVoiceText('');
+    setVoiceError('');
     setVoiceOpen(true);
-    const rec = new Rec();
-    rec.lang = voiceLang;
-    rec.interimResults = true;
-    rec.onresult = e => {
-      heard.current = Array.from(e.results).map(r => r[0].transcript).join('');
-      setVoiceText(heard.current);
-      if (level.current < 0.25) level.current = 0.35; // keep the orb moving even without mic access
-    };
-    rec.onend = () => {
-      setListening(false);
-      if (heard.current.trim()) closeVoice(true);
-    };
-    rec.onerror = () => setListening(false);
-    recRef.current = rec;
-    setListening(true);
-    rec.start();
-    stopMic.current = await startMicLevel(level);
+    await startVoiceCapture();
   };
 
   const suggestions = [t('aegis.s1'), t('aegis.s2'), t('aegis.s3'), t('aegis.s4'), t('aegis.s5')];
@@ -377,14 +450,20 @@ export function Aegis() {
             <Icon name="i-x" />
           </button>
           <button className="vm-lang" onClick={switchVoiceLang}>{voiceLang === 'zh-CN' ? '中文' : 'English'}</button>
-          <button className="vm-orb" onClick={() => closeVoice(true)} aria-label={t('aegis.tapToSend')}>
-            <VoiceOrb size={280} level={level} active={listening} />
+          <button
+            className="vm-orb"
+            onClick={() => (listening || voiceText.trim() ? closeVoice(true) : void startVoiceCapture())}
+            aria-label={t(listening || voiceText.trim() ? 'aegis.tapToSend' : 'aegis.retryVoice')}
+          >
+            <VoiceOrb size={280} level={level} active />
           </button>
-          <p className="vm-status">{listening ? t('aegis.listen') : t('aegis.paused')}</p>
-          <p className="vm-text">{voiceText || t('aegis.voiceHint')}</p>
-          <button className="btn vm-send" onClick={() => closeVoice(true)} disabled={!voiceText.trim()}>
-            <Icon name="i-send" />
-            {t('aegis.tapToSend')}
+          <p className={'vm-status' + (voiceError ? ' error' : '')} role={voiceError ? 'alert' : undefined}>
+            {voiceError || (listening ? t('aegis.listen') : t('aegis.paused'))}
+          </p>
+          <p className="vm-text">{voiceText || (voiceError ? t('aegis.voiceRecover') : t('aegis.voiceHint'))}</p>
+          <button className="btn vm-send" onClick={() => (voiceText.trim() ? closeVoice(true) : void startVoiceCapture())} disabled={listening && !voiceText.trim()}>
+            <Icon name={voiceText.trim() ? 'i-send' : 'i-mic'} />
+            {t(voiceText.trim() ? 'aegis.tapToSend' : 'aegis.retryVoice')}
           </button>
         </div>
       )}
@@ -397,7 +476,7 @@ interface SpeechRec {
   interimResults: boolean;
   onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void;
   onend: () => void;
-  onerror: () => void;
+  onerror: (e: { error: string }) => void;
   start: () => void;
   stop: () => void;
 }

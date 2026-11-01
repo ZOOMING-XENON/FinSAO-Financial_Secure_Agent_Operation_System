@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from unittest.mock import Mock
 from uuid import uuid4
@@ -70,6 +71,10 @@ def _context(session_id: Any) -> TrustedAgentContext:
         task_id=uuid4(),
         trace_id=uuid4(),
     )
+
+
+def _contains_chinese(value: str) -> bool:
+    return bool(re.search(r"[\u3400-\u9fff]", value))
 
 
 def test_rule_router_only_directs_exact_allowlisted_green_queries() -> None:
@@ -193,6 +198,59 @@ async def test_missing_transfer_slots_use_only_read_only_discovery_tools() -> No
     assert [call[0] for call in gateway.calls] == ["get_accounts", "list_beneficiaries"]
     assert "UUID" in response.message
     assert "create_transfer_draft" not in {call[0] for call in gateway.calls}
+
+
+@pytest.mark.asyncio
+async def test_english_locale_localizes_fallback_and_transfer_form() -> None:
+    service, gateway, _ = _components()
+    session_id = uuid4()
+    fallback = await service.handle(
+        AgentRequest(
+            session_id=session_id,
+            message="I spend 200 on campus, track that",
+            locale="en-US",
+        ),
+        _context(session_id),
+    )
+    assert fallback.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert not _contains_chinese(fallback.message)
+
+    transfer = await service.handle(
+        AgentRequest(
+            session_id=session_id,
+            message="查看余额，然后给小王转800元",
+            locale="en-US",
+        ),
+        _context(session_id),
+    )
+    assert transfer.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert not _contains_chinese(transfer.message)
+    assert isinstance(transfer.result, dict)
+    clarification = transfer.result["clarification"]
+    assert isinstance(clarification, dict)
+    labels = [str(field["label"]) for field in clarification["fields"]]
+    assert labels
+    assert all(not _contains_chinese(label) for label in labels)
+    assert [call[0] for call in gateway.calls] == ["get_accounts", "list_beneficiaries"]
+
+
+@pytest.mark.asyncio
+async def test_english_locale_localizes_completed_response_and_plan() -> None:
+    service, _, _ = _components()
+    session_id = uuid4()
+    response = await service.handle(
+        AgentRequest(
+            session_id=session_id,
+            message="查看我的账户",
+            locale="en-US",
+        ),
+        _context(session_id),
+    )
+    assert response.status == AgentResponseStatus.COMPLETED
+    assert not _contains_chinese(response.message)
+    assert response.plan is not None
+    assert not _contains_chinese(response.plan.goal)
+    assert all(not _contains_chinese(step.purpose) for step in response.plan.steps)
 
 
 @pytest.mark.asyncio
