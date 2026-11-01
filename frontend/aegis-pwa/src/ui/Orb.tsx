@@ -19,6 +19,14 @@ const LAYERS = [
   { color: [61, 139, 255], speed: -0.45, lobes: 2, phase: 4.4 },
 ];
 
+// Deeper versions of the same hues for light backgrounds (no teal, which reads as pale blue there).
+const IDLE_LAYERS = [
+  { color: [91, 76, 245], speed: 0.55, lobes: 3, phase: 0 },
+  { color: [200, 70, 190], speed: -0.8, lobes: 4, phase: 1.7 },
+  { color: [120, 64, 235], speed: 0.95, lobes: 5, phase: 3.1 },
+  { color: [52, 100, 240], speed: -0.45, lobes: 2, phase: 4.4 },
+];
+
 export function VoiceOrb({ size, level, active }: { size: number; level?: OrbLevel; active: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const activeRef = useRef(active);
@@ -43,28 +51,18 @@ export function VoiceOrb({ size, level, active }: { size: number; level?: OrbLev
       const target = activeRef.current ? 0.14 + Math.min(1, (level?.current ?? 0) * 1.6) * 0.55 : 0.05;
       amp += (target - amp) * 0.12;
       ctx.clearRect(0, 0, size, size);
-      const base = size * (activeRef.current ? 0.3 : 0.27) * (1 + amp * 0.25);
+      const base = size * (activeRef.current ? 0.3 : 0.31) * (1 + amp * 0.25);
       // soft glow
       const glow = ctx.createRadialGradient(c, c, base * 0.4, c, c, size * 0.5);
       glow.addColorStop(0, `rgba(140, 110, 255, ${0.28 + amp * 0.4})`);
       glow.addColorStop(1, 'rgba(140, 110, 255, 0)');
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, size, size);
-      // On light pages the orb sits in its own night-purple disc, so it looks the same as on the
-      // voice screen (additive colours need a dark background, or they wash out to pale blue).
-      if (!activeRef.current) {
-        const disc = ctx.createRadialGradient(c, c * 0.9, 0, c, c, size * 0.47);
-        disc.addColorStop(0, '#2b1d6e');
-        disc.addColorStop(0.65, '#160f36');
-        disc.addColorStop(1, '#0d0a20');
-        ctx.fillStyle = disc;
-        ctx.beginPath();
-        ctx.arc(c, c, size * 0.47, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalCompositeOperation = 'lighter';
-      const live = true;
-      for (const L of LAYERS) {
+      // On the dark voice screen colours add up to light (a white-hot centre). On light pages that
+      // would wash out to pale blue, so the idle orb paints deeper shades normally instead.
+      const live = activeRef.current;
+      ctx.globalCompositeOperation = live ? 'lighter' : 'source-over';
+      for (const L of live ? LAYERS : IDLE_LAYERS) {
         const rot = t * L.speed + L.phase;
         // Each colour orbits a little off-centre so the hues stay distinct instead of mixing to grey.
         const ox = c + Math.cos(rot * 0.7) * base * (0.16 + amp * 0.25);
@@ -84,13 +82,24 @@ export function VoiceOrb({ size, level, active }: { size: number; level?: OrbLev
         }
         const [R, G, B] = L.color;
         const g = ctx.createRadialGradient(ox, oy, 0, ox, oy, base * 1.1);
-        g.addColorStop(0, `rgba(${R},${G},${B},${live ? 0.55 : 0.85})`);
-        g.addColorStop(0.7, `rgba(${R},${G},${B},${live ? 0.35 : 0.55})`);
+        g.addColorStop(0, `rgba(${R},${G},${B},${live ? 0.55 : 0.8})`);
+        g.addColorStop(0.7, `rgba(${R},${G},${B},${live ? 0.35 : 0.6})`);
         g.addColorStop(1, `rgba(${R},${G},${B},0)`);
         ctx.fillStyle = g;
         ctx.fill();
       }
       ctx.globalCompositeOperation = 'source-over';
+      if (!live) {
+        // The bright core the voice screen gets from additive colour.
+        const core = ctx.createRadialGradient(c, c, 0, c, c, base * 0.62);
+        core.addColorStop(0, 'rgba(255,255,255,0.95)');
+        core.addColorStop(0.45, 'rgba(255,255,255,0.6)');
+        core.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = core;
+        ctx.beginPath();
+        ctx.arc(c, c, base * 0.62, 0, Math.PI * 2);
+        ctx.fill();
+      }
       const gloss = ctx.createRadialGradient(c - base * 0.35, c - base * 0.4, 0, c - base * 0.35, c - base * 0.4, base * 0.55);
       gloss.addColorStop(0, 'rgba(255,255,255,0.55)');
       gloss.addColorStop(1, 'rgba(255,255,255,0)');
