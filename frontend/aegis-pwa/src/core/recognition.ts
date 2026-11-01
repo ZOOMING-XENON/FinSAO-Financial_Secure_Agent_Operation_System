@@ -1,53 +1,68 @@
-// Receipt recognition client. The service itself is built separately (Yalalt); see README
-// "Receipt recognition contract". The app posts the photo to /api/recognition/receipts and
-// server.mjs forwards it to RECOGNITION_BACKEND_URL.
-import { api, ApiError, uid } from './api';
+// Receipt scanning on the device: Tesseract OCR (English + Simplified Chinese) runs in a web
+// worker, then parseReceipt() picks out the total, date, merchant and a category guess.
+// The photo never leaves the phone. Engine and language files are bundled in /ocr.
+import type { Worker } from 'tesseract.js';
 import type { Category, Money } from './types';
 import { CATEGORIES } from './types';
-import { AMOUNT_RE, normalizeAmount } from './money';
+import { parseReceipt } from './receipt';
 
 export interface ReceiptGuess {
   merchant: string;
-  amount: Money;
+  amount: Money | null;
   currency: string;
   category: Category;
   date: string | null;
-  confidence: number;
+  text: string;
 }
 
-const BASE: string = (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
+let workerP: Promise<Worker> | null = null;
+let onProgress: ((p: number) => void) | null = null;
 
-/** Demo mode only: a clearly labelled example that matches a seeded transaction. */
-const EXAMPLE: ReceiptGuess = { merchant: 'IKEA 宜家', amount: '142.60', currency: 'CNY', category: 'HOUSEHOLD', date: '2026-03-15', confidence: 0.92 };
+function getWorker(): Promise<Worker> {
+  if (!workerP) {
+    workerP = (async () => {
+      const { createWorker } = await import('tesseract.js');
+      const base = new URL(import.meta.env.BASE_URL + 'ocr/', window.location.href).href;
+      return createWorker(['chi_sim', 'eng'], 1, {
+        workerPath: base + 'worker.min.js',
+        corePath: base + 'core',
+        langPath: base + 'lang',
+        gzip: true,
+        logger: m => {
+          if (m.status === 'recognizing text' && onProgress) onProgress(m.progress);
+        },
+      });
+    })().catch(e => {
+      workerP = null;
+      throw e;
+    });
+  }
+  return workerP;
+}
 
-function parseGuess(raw: unknown): ReceiptGuess {
-  const r = (raw ?? {}) as Record<string, unknown>;
-  const amount = String(r.amount ?? '');
-  if (!AMOUNT_RE.test(amount)) throw new ApiError(502, 'RECOGNITION_BAD_RESPONSE');
-  const category = (CATEGORIES as readonly string[]).includes(String(r.category)) ? (r.category as Category) : 'UNKNOWN';
+export async function recognizeReceipt(file: File, progress?: (p: number) => void): Promise<ReceiptGuess> {
+  onProgress = progress ?? null;
+  const worker = await getWorker();
+  const { data } = await worker.recognize(file);
+  onProgress = null;
+  const parsed = parseReceipt(data.text);
   return {
-    merchant: String(r.merchant ?? '').slice(0, 120),
-    amount: normalizeAmount(amount),
-    currency: String(r.currency ?? 'CNY'),
-    category,
-    date: typeof r.date === 'string' ? r.date.slice(0, 10) : null,
-    confidence: typeof r.confidence === 'number' ? r.confidence : 0,
+    merchant: parsed.merchant,
+    amount: parsed.amount,
+    currency: 'CNY',
+    category: (CATEGORIES as readonly string[]).includes(parsed.category) ? (parsed.category as Category) : 'UNKNOWN',
+    date: parsed.date,
+    text: data.text,
   };
 }
 
-export async function recognizeReceipt(file: File): Promise<{ guess: ReceiptGuess; example: boolean }> {
-  if (api.core !== 'live') {
-    await new Promise(r => setTimeout(r, 900));
-    return { guess: EXAMPLE, example: true };
-  }
-  const form = new FormData();
-  form.append('receipt', file);
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}/api/recognition/receipts`, { method: 'POST', body: form, headers: { 'X-Trace-Id': uid(), Accept: 'application/json' } });
-  } catch {
-    throw new ApiError(0, 'RECOGNITION_NOT_CONFIGURED');
-  }
-  if (!res.ok) throw new ApiError(res.status, 'RECOGNITION_NOT_CONFIGURED');
-  return { guess: parseGuess(await res.json().catch(() => null)), example: false };
+/** A photo picked on Home is handed to the scan screen through here. */
+let pendingFile: File | null = null;
+export function setPendingReceipt(file: File) {
+  pendingFile = file;
+}
+export function takePendingReceipt(): File | null {
+  const f = pendingFile;
+  pendingFile = null;
+  return f;
 }

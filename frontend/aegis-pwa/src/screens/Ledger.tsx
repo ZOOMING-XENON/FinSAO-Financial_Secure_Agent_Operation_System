@@ -1,6 +1,6 @@
 // Cash ledger: record spending and income the bank can't see (cash, a friend paid).
 // Banking Core has no endpoint for manual entries, so these stay on this device only.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { uid } from '../core/api';
 import { currentMonth, monthKey, shiftMonth, type Month } from '../core/insights';
 import { formatDate, monthLabel } from '../core/format';
@@ -9,16 +9,10 @@ import type { Key } from '../core/i18n';
 import { useApp } from '../app/state';
 import { Icon, Sheet } from '../ui/kit';
 import { haptic } from '../ui/celebrate';
+import { lastAddedMonth, readLedger, writeLedger, type LedgerEntry, type LedgerKind } from '../core/ledger';
 
-type Kind = 'out' | 'in';
-interface Entry {
-  id: string;
-  kind: Kind;
-  cat: string;
-  cents: string; // decimal string, like the API
-  note: string;
-  at: string;
-}
+type Kind = LedgerKind;
+type Entry = LedgerEntry;
 
 const CATS: Record<Kind, { id: string; icon: string }[]> = {
   out: [
@@ -44,21 +38,8 @@ const CATS: Record<Kind, { id: string; icon: string }[]> = {
 };
 const iconFor = (kind: Kind, cat: string) => CATS[kind].find(c => c.id === cat)?.icon ?? 'p-dots';
 
-const KEY = 'aegis.ledger';
-function readEntries(): Entry[] {
-  try {
-    return JSON.parse(localStorage.getItem(KEY) || '[]');
-  } catch {
-    return [];
-  }
-}
-function writeEntries(list: Entry[]) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(list));
-  } catch {
-    /* storage unavailable */
-  }
-}
+const readEntries = readLedger;
+const writeEntries = writeLedger;
 
 /** Evaluates "12.5+30-4" in integer cents. Returns null for an invalid expression. */
 export function evalAmount(expr: string): bigint | null {
@@ -75,11 +56,15 @@ export function evalAmount(expr: string): bigint | null {
   return total;
 }
 
-export function Ledger() {
+export function Ledger({ startRecording = false }: { startRecording?: boolean }) {
   const { t, locale, toast } = useApp();
   const [entries, setEntries] = useState<Entry[]>(readEntries);
-  const [month, setMonth] = useState<Month>(currentMonth());
-  const [recording, setRecording] = useState(false);
+  const [month, setMonth] = useState<Month>(() => {
+    if (!lastAddedMonth) return currentMonth();
+    const [y, m] = lastAddedMonth.split('-').map(Number);
+    return { year: y, month: m };
+  });
+  const [recording, setRecording] = useState(startRecording);
   const [editing, setEditing] = useState<Entry | null>(null);
   const mine = entries.filter(e => e.at.startsWith(monthKey(month))).sort((a, b) => b.at.localeCompare(a.at));
   const out = mine.filter(e => e.kind === 'out').reduce((s, e) => s + toCents(e.cents), 0n);
@@ -209,6 +194,21 @@ function Recorder({ onClose, onSave }: { onClose: () => void; onSave: (e: Entry)
   const [note, setNote] = useState('');
   const [msg, setMsg] = useState('');
   const value = evalAmount(expr);
+
+  // Typing works too: digits, . + - Backspace and Enter, unless the note field has focus.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === 'INPUT' || e.metaKey || e.ctrlKey) return;
+      const k = e.key;
+      if (/^[0-9]$/.test(k) || k === '.' || k === '+' || k === '-') press(k);
+      else if (k === 'Backspace') press('del');
+      else if (k === 'Enter') done();
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   const press = (k: string) => {
     haptic(6);

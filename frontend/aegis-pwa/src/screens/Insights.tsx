@@ -9,7 +9,7 @@ import { useShield } from '../ui/Shield';
 import { Amount, Icon, Skeleton } from '../ui/kit';
 import { CashflowBars, Donut, PaceChart } from '../ui/charts';
 import { loadMoneyPicture, NudgeCard, useNudges } from './Home';
-import { BudgetSheet } from './Calendar';
+import { BudgetSheet, DayView } from './Calendar';
 
 const m$ = (c: bigint) => formatMoney(fromCents(c));
 
@@ -20,7 +20,8 @@ export function Insights() {
   const nudges = useNudges(pic.data);
   const [month, setMonth] = useState<Month>(currentMonth());
   const [budgetOpen, setBudgetOpen] = useState(false);
-  const [period, setPeriod] = useState<Period>('month');
+  const [period, setPeriod] = useState<Period | 'day'>('month');
+  const [day, setDay] = useState(() => new Date());
   const [offset, setOffset] = useState(0);
   const now = currentMonth();
   const isCurrent = monthKey(month) === monthKey(now);
@@ -37,7 +38,7 @@ export function Insights() {
     );
   }
   const { tx, budgets, subs } = pic.data;
-  const rr = period === 'month' ? null : periodRange(period, offset);
+  const rr = period === 'month' || period === 'day' ? null : periodRange(period, offset);
   const range = rr ? rangeSummary(tx, rr.from, rr.to, period === 'week' ? 'day' : 'month') : null;
   const rangeDays = rr ? Math.round((Math.min(Date.now(), rr.to.getTime()) - rr.from.getTime()) / 86_400_000) || 1 : 1;
   const rangeTitle = rr
@@ -85,7 +86,7 @@ export function Insights() {
       </div>
 
       <div className="seg" role="tablist" style={{ marginBottom: 12 }}>
-        {(['week', 'month', 'year'] as const).map(p => (
+        {(['day', 'week', 'month', 'year'] as const).map(p => (
           <button
             key={p}
             role="tab"
@@ -101,6 +102,8 @@ export function Insights() {
           </button>
         ))}
       </div>
+      {period === 'day' && <DayView tx={tx} day={day} onDay={setDay} />}
+      {period !== 'day' && (
       <div className="cal-head">
         <button className="icon-btn" aria-label={t('trends.prev')} onClick={() => (period === 'month' ? setMonth(shiftMonth(month, -1)) : setOffset(o => o - 1))}>
           <Icon name="i-left" />
@@ -116,6 +119,7 @@ export function Insights() {
           <Icon name="i-chev" />
         </button>
       </div>
+      )}
 
       {period !== 'month' && range && (
         <>

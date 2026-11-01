@@ -16,6 +16,7 @@ import { Track } from '../screens/Track';
 import { Cards } from '../screens/Cards';
 import { Services } from '../screens/Services';
 import { Ledger } from '../screens/Ledger';
+import { NewTxPrompt } from '../ui/NewTxPrompt';
 
 const TABS = [
   { id: 'home', icon: 'i-home', key: 'nav.home' },
@@ -61,7 +62,7 @@ function Shell() {
       view = <Services />;
       break;
     case 'ledger':
-      view = <Ledger />;
+      view = <Ledger key={arg ?? 'ledger'} startRecording={arg === 'new'} />;
       break;
     case 'aegis':
       view = <Aegis />;
@@ -99,6 +100,7 @@ function Shell() {
       <main id="view" tabIndex={-1} className={mainClass} key={reset}>
         {view}
       </main>
+      <NewTxPrompt />
       <nav className="tabs" aria-label="Main">
         {TABS.map(tab => (
           <a key={tab.id} href={'#/' + tab.id} className={(tab.id === activeTab ? 'on ' : '') + (tab.id === 'aegis' ? 'tab-shield' : '')} aria-current={tab.id === activeTab ? 'page' : undefined}

@@ -10,6 +10,9 @@ import { Amount, Icon, Skeleton } from '../ui/kit';
 import { TxRow } from '../ui/TxRow';
 import { PersonAvatar } from '../ui/art';
 import { PeopleStrip } from './Pay';
+import { BankCard } from '../ui/BankCard';
+import { setPendingReceipt } from '../core/recognition';
+import type { Card } from '../core/types';
 
 export interface AccountWithBalance extends Account {
   balance: string;
@@ -121,6 +124,7 @@ export function BillsCard({ subs }: { subs: Subscription[] }) {
 export function Home() {
   const { t, lang } = useApp();
   const pic = useLoad(loadMoneyPicture);
+  const cards = useLoad(() => api.get<Card[]>('/cards'));
   const nudges = useNudges(pic.data);
   const [hidden, setHidden] = useState(readHidden);
   const [acct, setAcct] = useState<string>('all');
@@ -158,6 +162,21 @@ export function Home() {
           <a className="icon-btn" href="#/insights" aria-label={t('home.forYou')}>
             <Icon name="i-bell" />
           </a>
+          <label className="icon-btn scan-btn" aria-label={t('home.tileScan')}>
+            <Icon name="i-scan" />
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={e => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  setPendingReceipt(f);
+                  go('track');
+                }
+              }}
+            />
+          </label>
         </div>
 
         <div className="home-total">
@@ -194,6 +213,25 @@ export function Home() {
       </header>
 
       <div className="pad">
+        <div className="sec-h">
+          <h2>{t('nav.cards')}</h2>
+          <a className="link" href="#/cards">
+            {t('home.manage')}
+          </a>
+        </div>
+        <div className="carousel home-cards">
+          {(cards.data ?? []).map(c => (
+            <a key={c.id} href="#/cards" className="bank-link">
+              <BankCard finish="black" kind={t('cards.debit')} last4={c.last_four} holder={PROFILE.name} holderLabel={t('cards.holder')} balance={accounts?.find(a => a.id === c.account_id)?.balance} balanceLabel={t('cards.available')} hidden={hidden} frozenLabel={c.status === 'FROZEN' ? t('me.frozen') : undefined} />
+            </a>
+          ))}
+          {(accounts ?? []).map((a, i) => (
+            <a key={a.id} href="#/cards" className="bank-link">
+              <BankCard finish={i % 2 ? 'white' : 'purple'} kind={a.name} last4={a.account_number.slice(-4)} holder={PROFILE.name} holderLabel={t('cards.holder')} balance={a.balance} balanceLabel={t('cards.available')} hidden={hidden} />
+            </a>
+          ))}
+        </div>
+
         <div className="sec-h">
           <h2>{t('home.quick')}</h2>
           <a className="link" href="#/services">
@@ -274,6 +312,9 @@ export function Home() {
           {pic.data?.tx.slice(0, 5).map(tx => <TxRow tx={tx} key={tx.id} />)}
         </section>
       </div>
+      <a className="fab" href="#/ledger/new" aria-label={t('led.record')}>
+        <Icon name="i-plus" />
+      </a>
     </>
   );
 }
