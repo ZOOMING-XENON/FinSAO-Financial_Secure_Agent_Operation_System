@@ -4,6 +4,127 @@ Aegis 是用于比赛和原型验证的模拟银行系统。用户可以在页�
 
 例如“查一下余额，再给小王转 800 元”包含两个动作，却没有指定付款账户。当前实现会读取本人账户和已保存的收款人供用户选择；用户确认后，Agent 可以形成“查询余额 → 创建转账草稿”的有序计划。草稿还须经过 Banking Core 的风险审批，完成授权和提交后才会改变余额。系统也支持消费分析与预算、订阅、银行卡、理财和储蓄目标等模拟业务；具体能力和限制以本文及源码为准。
 
+## 本地开发与启动
+
+### 环境要求
+
+| 软件 | 建议版本 | 用途 |
+| --- | --- | --- |
+| Python | 3.12 | Banking Core、Agent、迁移和测试 |
+| Node.js | 22.12 或更新 | Aegis PWA、Vite 8 和 Capacitor 8 |
+| PostgreSQL | 16 | 金融数据、Agent 任务和 checkpoint |
+| Docker Desktop | 近期稳定版，可选 | 最简单的本地 PostgreSQL 启动方式 |
+
+先确认版本：
+
+```text
+python --version
+node --version
+docker --version
+```
+
+### macOS 和 Linux
+
+从仓库根目录执行：
+
+```bash
+cp .env.example .env
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+docker compose up -d db
+python -m alembic upgrade head
+python -m scripts.seed_demo_data
+```
+
+`.env.example` 中的 `DATABASE_URL` 使用 Docker 容器主机名 `db`。当 Core 和 Agent 在宿主机上运行时，将 `.env` 中的连接改为：
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://banking:banking@127.0.0.1:5432/banking
+AGENT_DATABASE_URL=postgresql+psycopg://banking:banking@127.0.0.1:5432/banking
+AGENT_CHECKPOINT_DATABASE_URL=postgresql://banking:banking@127.0.0.1:5432/banking
+```
+
+### Windows PowerShell
+
+在 PowerShell 中从仓库根目录执行：
+
+```powershell
+Copy-Item .env.example .env
+py -3.12 -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+docker compose up -d db
+python -m alembic upgrade head
+python -m scripts.seed_demo_data
+```
+
+同样将 `.env` 中的 PostgreSQL 主机名从 `db` 改为 `127.0.0.1`。如果 PowerShell 禁止激活脚本，上面的 `Set-ExecutionPolicy` 只修改当前终端进程，不会改变系统级策略。
+
+### 启动三个服务
+
+迁移和 seed 完成后，打开三个终端。每个 Python 终端都应先激活 `.venv`。
+
+1. Banking Core：
+
+   ```bash
+   python -m uvicorn banking_core.app.main:app --host 127.0.0.1 --port 8000
+   ```
+
+2. Agent：
+
+   ```bash
+   python -m uvicorn agent.app:app --host 127.0.0.1 --port 8100
+   ```
+
+3. Aegis PWA：
+
+   ```bash
+   cd frontend/aegis-pwa
+   npm ci
+   npm run build
+   npm run serve
+   ```
+
+打开 <http://127.0.0.1:5174>。开发时可以用 `npm run dev` 替代最后两条命令启用热更新。前端代理不会自动读取仓库根目录的 `.env`；如果修改了服务令牌，请在启动 Node 进程前显式设置 `BANKING_SERVICE_TOKEN` 和 `AGENT_API_TOKEN`。
+
+### 快速检查与常见故障
+
+```bash
+python -m alembic current
+python -m alembic heads
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8100/openapi.json
+curl http://127.0.0.1:5174/api/agent/openapi.json
+```
+
+Windows PowerShell 可以用 `Invoke-WebRequest` 代替 `curl`。如果日志报告 `transactions.user_id does not exist`，表示应用代码已包含 `20261101_0013` 数据模型，但当前 PostgreSQL 还没有应用该迁移。先核对 `.env` 中的数据库地址，再执行：
+
+```bash
+python -m alembic upgrade head
+```
+
+不要手工只添加 `user_id` 一列。`0013` 还会添加其他交易字段、索引和历史数据回填，必须完整执行。
+
+### 验证
+
+```bash
+python -m pytest
+python -m ruff check .
+python -m mypy
+
+cd frontend/aegis-pwa
+npm run typecheck
+npm test
+```
+
+PostgreSQL 集成测试会重置测试库，只能将 `DATABASE_TEST_URL` 指向独立测试库，不得指向开发或生产数据库。
+
 ## 阅读路线
 
 | 文档 | 内容概述|
@@ -70,5 +191,5 @@ Agent 的工具调用先经过参数来源、允许动作和计划结构校验�
 
 本次文档核对时，Python 测试为 `79 passed, 10 skipped`；10 项 PostgreSQL 集成测试因未设置 `DATABASE_TEST_URL` 跳过。Aegis 前端 6 项 Node 测试和 TypeScript 类型检查通过。仓库的 [`evaluation/reports`](evaluation/reports/) 还保留了历史评测，但其中 P6 冻结集只覆盖提示注入、跨用户访问和规划功能三类样本，不能据此推断开放场景下的整体理解准确率。
 
-运行本地系统的步骤见仓库根目录 [README](README.md) 和 [Aegis 前端说明](frontend/aegis-pwa/README.md)。注意根 README 的部分旧启动路径已与当前 `frontend/aegis-pwa` 不一致；前端运行以其目录下的说明与 `package.json` 为准。
+运行本地系统的步骤见上文的[本地开发与启动](#本地开发与启动)和 [Aegis 前端说明](frontend/aegis-pwa/README.md)。
 

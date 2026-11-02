@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable
 from typing import Any, Protocol
 from uuid import uuid4
 
+from agent.beneficiary_ranking import ModelBeneficiaryRanker
 from agent.capabilities import CapabilityBroker
 from agent.context import FactSource, SlotFact, SlotState, SlotTracker
 from agent.contracts import (
@@ -28,6 +30,7 @@ from agent.localization import (
     FIELD_LABELS,
     contains_cjk,
     is_english,
+    localize_entity_name,
     localize_plan,
 )
 from agent.planning import PlanValidationError, PlanVerifier
@@ -81,6 +84,7 @@ class AgentService:
         responses: SafeResponseGenerator | None = None,
         plan_reviewer: PlanReviewer | None = None,
         plan_review_threshold: float = 0.5,
+        beneficiary_ranker: ModelBeneficiaryRanker | None = None,
     ) -> None:
         self._router = router
         self._slots = slots
@@ -91,6 +95,7 @@ class AgentService:
         self._responses = responses or SafeResponseGenerator()
         self._plan_reviewer = plan_reviewer
         self._plan_review_threshold = plan_review_threshold
+        self._beneficiary_ranker = beneficiary_ranker
 
     async def handle(self, request: AgentRequest, context: TrustedAgentContext) -> AgentResponse:
         if request.confirmation is not None:
@@ -434,6 +439,7 @@ class AgentService:
             "target_amount": "amount",
         }
         options: dict[str, list[ClarificationOption]] = {}
+        beneficiary_suggestion: tuple[str, str] | None = None
         candidates = slots.facts.get("expense_candidates")
         if candidates is not None and isinstance(candidates.value, list):
             options["expense_id"] = [
@@ -472,14 +478,48 @@ class AgentService:
             )
             if accounts.status == ToolResultStatus.SUCCESS and accounts.data is not None:
                 payload = accounts.data.model_dump(mode="json")
+                active_accounts = [
+                    item for item in payload.get("accounts", []) if item.get("status") == "ACTIVE"
+                ]
                 options["source_account_id"] = [
                     ClarificationOption(
                         value=str(item["id"]),
-                        label=f'{item["name"]} · {item["account_number"]}',
+                        label=(
+                            f'{localize_entity_name(item["name"], request.locale)}'
+                            f' · {item["account_number"]}'
+                        ),
                     )
-                    for item in payload.get("accounts", [])
-                    if item.get("status") == "ACTIVE"
+                    for item in active_accounts
                 ]
+                if "source_account_id" not in slots.facts:
+                    requested_name = (
+                        "Savings"
+                        if re.search(
+                            r"\b(?:savings?|saving account)\b|储蓄",
+                            request.message,
+                            re.IGNORECASE,
+                        )
+                        else "Checking"
+                    )
+                    currency = slots.facts.get("currency")
+                    matches = [
+                        item
+                        for item in active_accounts
+                        if str(item.get("name") or "").casefold() == requested_name.casefold()
+                        and (
+                            currency is None
+                            or str(item.get("currency") or "") == str(currency.value)
+                        )
+                    ]
+                    if len(matches) == 1:
+                        slots.facts["source_account_id"] = SlotFact(
+                            "source_account_id",
+                            str(matches[0]["id"]),
+                            FactSource.TOOL_VERIFIED,
+                        )
+                        slots.missing = [
+                            name for name in slots.missing if name != "source_account_id"
+                        ]
             beneficiaries = await self._gateway.execute(
                 tool_name="list_beneficiaries",
                 arguments={},
@@ -492,9 +532,9 @@ class AgentService:
                     ClarificationOption(
                         value=str(item["destination_account_id"]),
                         label=(
-                            f'{item["name"]}'
+                            f'{localize_entity_name(item["name"], request.locale)}'
                             + (
-                                f' ({item["nickname"]})'
+                                f' ({localize_entity_name(item["nickname"], request.locale)})'
                                 if is_english(request.locale) and item.get("nickname")
                                 else f'（{item["nickname"]}）'
                                 if item.get("nickname")
@@ -527,6 +567,35 @@ class AgentService:
                         slots.missing = [
                             name for name in slots.missing if name != "destination_account_id"
                         ]
+                if (
+                    "destination_account_id" not in slots.facts
+                    and self._beneficiary_ranker is not None
+                    and items
+                ):
+                    recommendation = await self._beneficiary_ranker.rank(
+                        message=request.message,
+                        conversation=request.conversation,
+                        candidates=items,
+                        locale=request.locale,
+                        request_id=request.request_id,
+                    )
+                    if recommendation is not None:
+                        selected = recommendation.candidate
+                        slots.facts["destination_account_id"] = SlotFact(
+                            "destination_account_id",
+                            str(selected["destination_account_id"]),
+                            FactSource.MODEL_INFERRED,
+                        )
+                        slots.missing = [
+                            name for name in slots.missing if name != "destination_account_id"
+                        ]
+                        display_name = localize_entity_name(
+                            selected.get("name"), request.locale
+                        )
+                        reason = recommendation.reason
+                        if is_english(request.locale) and contains_cjk(reason):
+                            reason = "It best matches the recent conversation."
+                        beneficiary_suggestion = (display_name, reason)
         if intent.intent == Intent.RECORD_EXPENSE:
             field_names = ["amount", "currency", "merchant"]
             if "category" in slots.facts:
@@ -569,12 +638,20 @@ class AgentService:
                 else "??????????????????????????????"
             )
         elif intent.intent == Intent.TRANSFER:
-            message = (
-                "Choose a source account and a saved recipient. The form never asks "
-                "you to copy an internal UUID."
-                if is_english(request.locale)
-                else "请选择付款账户，并输入或选择以前保存的收款人；系统不会要求你复制内部 UUID。"
-            )
+            if beneficiary_suggestion is not None:
+                name, reason = beneficiary_suggestion
+                message = (
+                    f"AI suggested {name}: {reason} Review every field before confirming."
+                    if is_english(request.locale)
+                    else f"AI 建议收款人为 {name}：{reason} 请在确认前检查所有字段。"
+                )
+            else:
+                message = (
+                    "Review the source account and choose a saved beneficiary. The form never "
+                    "asks you to copy an internal UUID."
+                    if is_english(request.locale)
+                    else "请检查付款账户，并选择以前保存的收款人；系统不会要求你复制内部 UUID。"
+                )
         elif inferred_labels:
             suffix = (
                 f" and add: {', '.join(missing_labels)}" if missing_labels else ""

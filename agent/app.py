@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
 
+from agent.beneficiary_ranking import ModelBeneficiaryRanker
 from agent.capabilities import CapabilityBroker
 from agent.checkpoints import AsyncFromSyncPostgresSaver
 from agent.config import AgentSettings, get_agent_settings
@@ -136,6 +137,7 @@ _service = AgentService(
         else None
     ),
     plan_review_threshold=_settings.jev_plan_review_min,
+    beneficiary_ranker=ModelBeneficiaryRanker(_model_provider),
 )
 _task_store = SqlAlchemyTaskStore(_settings.agent_database_url)
 _runtime_graph = build_runtime_agent_graph(_service, _gateway, MemorySaver())

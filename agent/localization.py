@@ -75,6 +75,29 @@ def contains_cjk(value: str) -> bool:
     return re.search(r"[\u3400-\u9fff]", value) is not None
 
 
+_ENGLISH_ENTITY_NAMES = {
+    "爸爸": "Dad",
+    "妈妈": "Mom",
+    "爷爷": "Grandpa",
+    "奶奶": "Grandma",
+    "外公": "Grandpa",
+    "外婆": "Grandma",
+    "儿子": "Son",
+    "女儿": "Daughter",
+    "日常账户": "Checking",
+    "活期账户": "Checking",
+    "储蓄账户": "Savings",
+}
+
+
+def localize_entity_name(value: object, locale: str) -> str:
+    """Localize built-in demo roles while preserving custom names."""
+    text = str(value or "")
+    if not is_english(locale):
+        return text
+    return _ENGLISH_ENTITY_NAMES.get(text, text)
+
+
 _ENGLISH_PURPOSE = {
     "record_expense": "Record an expense",
     "update_expense": "Update an expense",

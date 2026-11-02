@@ -92,7 +92,7 @@ Both backend endpoints are disabled by default. Configure `MULTIMEDIA_ENABLED=tr
 
 ## Run it
 
-You need Node 18+ and the backend from the repo root (see the main `README.md`).
+You need Node 22.12+ and the backend from the repo root (see the main `README.md`).
 
 ```bash
 cd frontend/aegis-pwa

@@ -11,6 +11,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
+from agent.beneficiary_ranking import ModelBeneficiaryRanker
 from agent.capabilities import CapabilityBroker
 from agent.context import SlotTracker
 from agent.contracts import (
@@ -62,6 +63,14 @@ class FailIfRouted:
         raise AssertionError("a confirmed form must not be sent through the router or LLM")
 
 
+class FailIfReviewed:
+    async def review_plan(
+        self, text: str, plan: TaskPlan, intent: Intent | None = None
+    ) -> float:
+        del text, plan, intent
+        raise AssertionError("a confirmed form must not be sent through model plan review")
+
+
 class ReconciliationGateway:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -105,8 +114,9 @@ class ClarificationGateway:
                     accounts=[
                         {
                             "id": str(uuid4()),
-                            "name": "日常账户",
+                            "name": "Checking",
                             "account_number": "DEMO-001",
+                            "currency": "CNY",
                             "status": "ACTIVE",
                         }
                     ]
@@ -315,12 +325,163 @@ async def test_transfer_clarification_returns_account_and_contact_choices() -> N
     assert isinstance(clarification, dict)
     fields = {item["name"]: item for item in clarification["fields"]}
     assert fields["source_account_id"]["options"]
+    assert fields["source_account_id"]["value"] is not None
     assert (
         fields["destination_account_id"]["options"][0]["label"]
         == "Friend（Friend） · 尾号 0001"
     )
     assert fields["destination_account_id"]["value"] is not None
     assert gateway.calls == ["get_accounts", "list_beneficiaries"]
+
+
+@pytest.mark.asyncio
+async def test_transfer_uses_recent_context_to_recommend_beneficiary_and_checking() -> None:
+    class ContextGateway:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.checking_id = uuid4()
+            self.savings_id = uuid4()
+            self.dad_id = uuid4()
+            self.mom_id = uuid4()
+
+        async def execute(
+            self, *, tool_name: str, arguments: dict[str, Any], context: ExecutionContext
+        ) -> ToolResult[Any]:
+            del arguments, context
+            self.calls.append(tool_name)
+            if tool_name == "get_accounts":
+                class Accounts(BaseModel):
+                    accounts: list[dict[str, Any]]
+
+                return ToolResult(
+                    status=ToolResultStatus.SUCCESS,
+                    data=Accounts(
+                        accounts=[
+                            {
+                                "id": str(self.checking_id),
+                                "name": "Checking",
+                                "account_number": "DEMO-001",
+                                "currency": "CNY",
+                                "status": "ACTIVE",
+                            },
+                            {
+                                "id": str(self.savings_id),
+                                "name": "Savings",
+                                "account_number": "DEMO-002",
+                                "currency": "CNY",
+                                "status": "ACTIVE",
+                            },
+                        ]
+                    ),
+                )
+            if tool_name == "list_beneficiaries":
+                class Beneficiaries(BaseModel):
+                    beneficiaries: list[dict[str, Any]]
+
+                return ToolResult(
+                    status=ToolResultStatus.SUCCESS,
+                    data=Beneficiaries(
+                        beneficiaries=[
+                            {
+                                "destination_account_id": str(self.dad_id),
+                                "destination_account_number": "299000000001",
+                                "name": "爸爸",
+                                "nickname": "爸爸",
+                            },
+                            {
+                                "destination_account_id": str(self.mom_id),
+                                "destination_account_number": "390000000002",
+                                "name": "妈妈",
+                                "nickname": "妈妈",
+                            },
+                        ]
+                    ),
+                )
+            raise AssertionError(tool_name)
+
+    registry = ToolRegistry()
+    register_default_tools(registry, Mock())
+    gateway = ContextGateway()
+    service = AgentService(
+        router=RuleRouter(),
+        slots=SlotTracker(),
+        planner=BaselinePlanner(),
+        verifier=PlanVerifier(registry),
+        capabilities=CapabilityBroker(registry),
+        gateway=gateway,
+        beneficiary_ranker=ModelBeneficiaryRanker(
+            FakeModelProvider(
+                {
+                    "candidate_key": "candidate_1",
+                    "confidence": 0.91,
+                    "reason": "The previous message says the user's mom has a birthday tomorrow.",
+                }
+            )
+        ),
+    )
+    session_id = uuid4()
+    response = await service.handle(
+        AgentRequest(
+            session_id=session_id,
+            message="给她转账100元",
+            locale="en-US",
+            conversation=[
+                ConversationMessage(
+                    role=ConversationRole.USER,
+                    content="我妈妈明天过生日。",
+                ),
+                ConversationMessage(
+                    role=ConversationRole.ASSISTANT,
+                    content="That sounds thoughtful. How can I help?",
+                ),
+            ],
+        ),
+        _trusted_context(session_id),
+    )
+
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert isinstance(response.result, dict)
+    clarification = response.result["clarification"]
+    assert isinstance(clarification, dict)
+    fields = {item["name"]: item for item in clarification["fields"]}
+    assert fields["source_account_id"]["value"] == str(gateway.checking_id)
+    assert fields["destination_account_id"]["value"] == str(gateway.mom_id)
+    assert fields["destination_account_id"]["inferred"] is True
+    assert "Mom" in fields["destination_account_id"]["options"][1]["label"]
+    assert all(
+        not any("\u3400" <= char <= "\u9fff" for char in option["label"])
+        for option in fields["destination_account_id"]["options"]
+    )
+    assert "AI suggested Mom" in response.message
+    assert not any("\u3400" <= char <= "\u9fff" for char in response.message)
+
+    explicit_savings = await service.handle(
+        AgentRequest(
+            session_id=uuid4(),
+            message="Transfer 100 CNY from Savings to her",
+            locale="en-US",
+            conversation=[
+                ConversationMessage(
+                    role=ConversationRole.USER,
+                    content="My mom has a birthday tomorrow.",
+                )
+            ],
+        ),
+        _trusted_context(uuid4()),
+    )
+    assert isinstance(explicit_savings.result, dict)
+    savings_clarification = explicit_savings.result["clarification"]
+    assert isinstance(savings_clarification, dict)
+    savings_fields = {
+        item["name"]: item for item in savings_clarification["fields"]
+    }
+    assert savings_fields["source_account_id"]["value"] == str(gateway.savings_id)
+    assert gateway.calls == [
+        "get_accounts",
+        "list_beneficiaries",
+        "get_accounts",
+        "list_beneficiaries",
+    ]
 
 
 @pytest.mark.asyncio
@@ -331,10 +492,16 @@ async def test_confirmed_transfer_form_bypasses_llm_and_executes_once() -> None:
     service = AgentService(
         router=FailIfRouted(),
         slots=SlotTracker(),
-        planner=BaselinePlanner(),
+        planner=HybridPlanner(
+            BaselinePlanner(),
+            FakeModelProvider(
+                {"goal": "must not run", "steps": [{"step_id": "model_step"}]}
+            ),
+        ),
         verifier=PlanVerifier(registry),
         capabilities=CapabilityBroker(registry),
         gateway=gateway,
+        plan_reviewer=FailIfReviewed(),
     )
     source, destination, session_id = uuid4(), uuid4(), uuid4()
     response = await service.handle(
