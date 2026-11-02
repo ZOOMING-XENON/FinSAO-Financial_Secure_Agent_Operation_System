@@ -177,6 +177,10 @@ class TaskDecomposer:
                     "proposed_slots.limit as an integer, and put the category into "
                     "proposed_slots.category using its uppercase category code. For budget "
                     "status queries, put the requested category code into proposed_slots.category. "
+                    "When a transfer amount depends on a balance query in this request, make "
+                    "the transfer depend on that query. Preserve percentage and recipient as "
+                    "proposed_slots.percentage and proposed_slots.recipient; never put a raw "
+                    "percentage string in proposed_slots.amount. "
                     f"intent must be one of: {supported}."
                 ),
             ),

@@ -259,7 +259,7 @@ class RuleRouter:
             )
         if any(
             word in normalized
-            for word in ("add", "record", "log", "加了", "记一笔", "记录")
+            for word in ("record", "log", "加了", "记一笔", "记录")
         ) and re.search(r"\d", normalized):
             return self._result(
                 Intent.RECORD_EXPENSE,

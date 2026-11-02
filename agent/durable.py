@@ -119,6 +119,7 @@ class DurableTaskManager:
                             context.expected_intent.value if context.expected_intent else None
                         ),
                         "expected_slots": context.expected_slots,
+                        "verified_balances": context.verified_balances,
                     },
                 },
                 {"configurable": {"thread_id": str(context.task_id)}},
