@@ -59,6 +59,6 @@ docs
 .impeccable/
 .tmp/
 outputs/
-data_and_conversations/
+data and conversations/
 banking_dataset/
 docs/
