@@ -550,6 +550,40 @@ svg.person { stroke: none; stroke-width: 0; }
 .steps { margin: 8px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--muted); }
 .steps li { display: flex; gap: 6px; align-items: center; }
 .steps svg { width: 14px; height: 14px; color: var(--green); }
+.bundle-progress { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.bundle-progress-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 4px 0; color: var(--muted); font-size: 12.5px; }
+.bundle-progress-row svg { width: 15px; height: 15px; color: var(--green); }
+.bundle-progress-row small { color: var(--ink); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.agent-result { width: min(322px, 72vw); margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.agent-result + .agent-result { margin-top: 12px; }
+.agent-result-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 3px; }
+.agent-result-title { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; }
+.agent-result-title svg { width: 17px; height: 17px; color: var(--brand); }
+.agent-result-count { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.agent-result-list { display: flex; flex-direction: column; }
+.agent-result-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.agent-result-icon { width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; flex: none; color: var(--brand); background: var(--brand-soft); }
+.agent-result-icon svg { width: 18px; height: 18px; }
+.agent-result-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.agent-result-main b { font-size: 13.5px; font-weight: 650; overflow-wrap: anywhere; }
+.agent-result-main span, .agent-result-main small { color: var(--muted); font-size: 11.5px; line-height: 1.35; }
+.agent-result-row > strong { margin-left: auto; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.agent-result-row .badge { flex: none; font-size: 10.5px; }
+.agent-result-link { display: inline-flex; align-items: center; min-height: 36px; padding-top: 8px; color: var(--brand); font-size: 12.5px; font-weight: 650; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.agent-result-copy { margin: 0; }
+.balance-result .agent-result-label { display: block; color: var(--muted); font-size: 12px; }
+.agent-result-breakdown { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.agent-result-breakdown span { display: flex; justify-content: space-between; gap: 16px; color: var(--muted); font-size: 12px; }
+.agent-result-breakdown b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.agent-goal { padding: 11px 0; border-bottom: 1px solid var(--line); }
+.agent-goal-head, .agent-goal-money, .agent-goal-meta { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.agent-goal-head b { font-size: 13.5px; font-weight: 650; }
+.agent-goal-money { margin-top: 8px; }
+.agent-goal-money strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.agent-goal-money span, .agent-goal-meta { color: var(--muted); font-size: 11.5px; }
+.agent-progress { height: 5px; overflow: hidden; margin: 8px 0 5px; border-radius: 999px; background: var(--surface-2); }
+.agent-progress i { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
+.agent-result a:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; border-radius: 4px; }
 .suggest { display: flex; gap: 8px; overflow-x: auto; margin: 0 -16px; padding: 4px 16px 10px; scrollbar-width: none; scroll-padding-inline: 16px; }
 .suggest::-webkit-scrollbar { display: none; }
 .suggest button { flex: none; height: 38px; padding: 0 14px; border-radius: 999px; background: var(--surface); box-shadow: var(--shadow); font-size: 14px; white-space: nowrap; }

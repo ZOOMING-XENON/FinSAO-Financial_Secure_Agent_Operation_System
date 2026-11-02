@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, uid } from '../core/api';
 import type { AgentTask, AgentTurnResponse, ClarificationField, ConversationMessage, SpendingSummary } from '../core/types';
-import { categoryKey, monthLabel } from '../core/format';
+import { monthLabel } from '../core/format';
 import { formatMoney } from '../core/money';
 import { go, useApp, useClient } from '../app/state';
 import { useShield } from '../ui/Shield';
-import { Amount, Icon } from '../ui/kit';
+import { Icon } from '../ui/kit';
+import { AgentResult } from '../ui/AgentResult';
 import { startMicLevel, VoiceOrb, type OrbLevel } from '../ui/Orb';
 import { haptic } from '../ui/celebrate';
 import { loadAccounts } from './Home';
@@ -111,52 +112,6 @@ export function Aegis() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent]);
 
-  const renderResult = (task: AgentTask): ReactNode => {
-    const r = task.result ?? {};
-    const msg = task.public_message || t('aegis.done');
-    if (typeof r.reply === 'string') return r.reply;
-    if (typeof r.balance === 'string') {
-      return (
-        <>
-          {t('aegis.balance')}
-          <Amount value={r.balance} currency={(r.currency as string) || 'CNY'} />
-        </>
-      );
-    }
-    if (Array.isArray(r.accounts)) {
-      return (r.accounts as { name: string; account_number: string; status: string }[]).map(a => (
-        <div key={a.account_number}>
-          {a.name} · •••• {a.account_number.slice(-4)}
-        </div>
-      ));
-    }
-    if (typeof r.total === 'string' && r.by_category) {
-      return (
-        <>
-          <Amount value={r.total} />
-          {Object.entries(r.by_category as Record<string, string>).map(([c, v]) => (
-            <div key={c} className="small">
-              {t(`cat.${categoryKey(c)}`)} · {formatMoney(v)}
-            </div>
-          ))}
-        </>
-      );
-    }
-    if (Array.isArray(r.items)) {
-      const items = r.items as Record<string, unknown>[];
-      if (!items.length) return msg;
-      return items.slice(0, 8).map((v, i) => (
-        <div key={i} className="small">
-          {String(v.name ?? v.label ?? v.merchant_name ?? v.description ?? '')}
-          {v.last_four ? ` · •••• ${v.last_four}` : ''}
-          {typeof v.amount === 'string' ? ` · ${formatMoney(v.amount)}` : ''}
-          {v.status ? ` · ${v.status}` : ''}
-        </div>
-      ));
-    }
-    return msg;
-  };
-
   const planSteps = (task: AgentTask) =>
     task.plan?.steps?.length ? (
       <ul className="steps">
@@ -174,29 +129,39 @@ export function Aegis() {
     setReplyTarget(null);
     remember('assistant', turn.public_message || 'done');
     const active = bundle.items.find(item => item.item_id === bundle.active_item_id) ?? null;
-    const rows = (
-      <div className="steps">
+    const showProgress = bundle.items.length > 1 || bundle.items.some(item => item.status !== 'COMPLETED');
+    const statusLabel = (status: string) => {
+      const labels: Record<string, string> = {
+        COMPLETED: t('aegis.status.completed'),
+        NEEDS_CLARIFICATION: t('aegis.status.needsInfo'),
+        NEEDS_CONFIRMATION: t('aegis.status.needsConfirm'),
+        WAITING_APPROVAL: t('aegis.status.waitingApproval'),
+        DEFERRED_UNSUPPORTED: t('aegis.status.deferred'),
+        FAILED: t('aegis.status.failed'),
+        PROPOSED: t('aegis.status.queued'),
+      };
+      return labels[status] ?? status;
+    };
+    const rows = showProgress ? (
+      <div className="bundle-progress" aria-label={t('aegis.taskProgress')}>
         {bundle.items.map(item => (
-          <div key={item.item_id} className="small">
-            <Icon name={item.status === 'COMPLETED' ? 'i-check' : 'i-clock'} />
-            {item.evidence} · {item.status}
+          <div key={item.item_id} className="bundle-progress-row">
+            <Icon name={item.status === 'COMPLETED' ? 'i-check' : item.status === 'FAILED' ? 'i-x' : 'i-clock'} />
+            <span>{item.evidence}</span>
+            <small>{statusLabel(item.status)}</small>
           </div>
         ))}
       </div>
-    );
+    ) : null;
     const results = bundle.items
       .filter(item => item.status === 'COMPLETED' && item.intent !== 'GENERAL_CHAT')
       .map(item => (
-        <div key={`result-${item.item_id}`}>
-          {renderResult({
-            id: item.task_id || item.item_id,
-            status: item.status,
-            public_message: null,
-            plan: item.plan,
-            result: item.result,
-            error_code: item.error_code,
-          })}
-        </div>
+        <AgentResult
+          key={`result-${item.item_id}`}
+          intent={item.intent}
+          result={item.result}
+          fallback={t('aegis.done')}
+        />
       ));
     if (active?.clarification) {
       push({
