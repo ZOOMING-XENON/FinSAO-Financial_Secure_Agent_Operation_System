@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, uid } from '../core/api';
-import { CATEGORIES, type Category, type Transaction } from '../core/types';
+import { PICKABLE, type Category, type Transaction } from '../core/types';
 import { categoryKey, direction, formatDate } from '../core/format';
 import { formatMoney, isValidAmount, normalizeAmount, toCents } from '../core/money';
 import { recognizeReceipt, takePendingReceipts } from '../core/recognition';
@@ -229,7 +229,7 @@ export function Track() {
                   <>
                     <label className="f">{t('track.category')}</label>
                     <div className="cat-pick">
-                      {CATEGORIES.map(c => (
+                      {PICKABLE.map(c => (
                         <button key={c} className={x.cat === c ? 'on' : ''} onClick={() => patch(x.id, { cat: c })} aria-pressed={x.cat === c}>
                           <span className="ico">
                             <Icon name={'c-' + c} />
@@ -289,7 +289,7 @@ export function Track() {
               {formatDate(editing.posted_at, locale)} · <Amount value={editing.amount} currency={editing.currency} />
             </p>
             <div className="cat-pick">
-              {CATEGORIES.map(c => (
+              {PICKABLE.map(c => (
                 <button key={c} className={categoryKey(editing.category) === c ? 'on' : ''} onClick={() => setCategory(editing, c)}>
                   <span className="ico">
                     <Icon name={'c-' + c} />

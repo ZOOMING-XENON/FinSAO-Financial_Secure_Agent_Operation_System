@@ -7,8 +7,9 @@ export function TxRow({ tx }: { tx: Transaction }) {
   const { t, locale } = useApp();
   const dir = direction(tx);
   const cat = categoryKey(tx.category);
-  const icon = dir === 'in' ? 'IN' : dir === 'move' ? 'MOVE' : cat;
-  const label = dir === 'in' ? t('tx.in') : dir === 'move' ? t('tx.move') : t(`cat.${cat}`);
+  const sent = dir === 'out' && tx.category === 'INTERNAL_TRANSFER';
+  const icon = dir === 'in' ? 'IN' : dir === 'move' || sent ? 'MOVE' : cat;
+  const label = dir === 'in' ? t('tx.in') : dir === 'move' ? t('tx.move') : sent ? t('tx.sent') : t(`cat.${cat}`);
   return (
     <div className="row">
       <span className={'ico ' + icon}>

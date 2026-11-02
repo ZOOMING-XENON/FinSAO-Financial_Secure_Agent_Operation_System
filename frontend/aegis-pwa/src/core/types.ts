@@ -28,6 +28,8 @@ export const CATEGORIES = [
   'UNKNOWN',
 ] as const;
 export type Category = (typeof CATEGORIES)[number];
+/** Categories a person can choose; UNKNOWN means "not chosen yet" and is never offered. */
+export const PICKABLE: Category[] = CATEGORIES.filter(c => c !== 'UNKNOWN');
 
 export interface Account {
   id: string;

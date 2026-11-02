@@ -116,7 +116,8 @@ const YELLOW_OPS = new Set(['subscription.cancel', 'card.limit', 'card.freeze', 
 function todayOutgoing(): bigint {
   const day = now().slice(0, 10);
   return Object.values(db.drafts)
-    .filter(d => d.created.startsWith(day) && d.status !== 'CANCELLED' && d.status !== 'EXPIRED')
+    // Like Banking Core: completed transfers count, pending ones only until they expire.
+    .filter(d => d.created.startsWith(day) && (d.status === 'COMPLETED' || (d.status === 'PENDING_AUTHORIZATION' && Date.parse(String(d.expires_at)) > Date.now())))
     .reduce((sum, d) => sum + toCents(d.amount), 0n);
 }
 
@@ -181,7 +182,8 @@ export function mockCore(method: string, path: string, q: Record<string, string>
       .slice(offset, offset + limit)
       .map(t => ({
         ...publicTx(t),
-        direction: t.category === 'INTERNAL_TRANSFER' ? 'MOVE' : t.out ? 'DEBIT' : 'CREDIT',
+        // Demo transfers go to other people (money out); pots and investments stay the user's.
+        direction: t.category === 'SAVINGS' || t.category === 'WEALTH' ? 'MOVE' : t.out ? 'DEBIT' : 'CREDIT',
         kind: t.category === 'INTERNAL_TRANSFER' ? 'TRANSFER' : t.category === 'OPENING_BALANCE' ? 'OPENING_BALANCE' : t.out ? 'EXPENSE' : 'INCOME',
         origin: 'BANK',
       }));
@@ -242,6 +244,14 @@ export function mockCore(method: string, path: string, q: Record<string, string>
   if (method === 'GET' && (r = m(/^\/transfers\/(?:drafts\/)?([^/]+)$/))) {
     const d = db.drafts[r[1]];
     if (!d) return err(404, 'NOT_FOUND');
+    const { created: _c, ...pub } = d;
+    return [200, pub];
+  }
+  if (method === 'POST' && (r = m(/^\/transfers\/([^/]+)\/cancel$/))) {
+    const d = db.drafts[r[1]];
+    if (!d) return err(404, 'NOT_FOUND');
+    if (d.status === 'COMPLETED') return err(409, 'CONFLICT', 'invalid transfer transition');
+    d.status = 'CANCELLED';
     const { created: _c, ...pub } = d;
     return [200, pub];
   }

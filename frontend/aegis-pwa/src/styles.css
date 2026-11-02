@@ -738,3 +738,12 @@ main.chat { padding-bottom: calc(var(--tabs-h) + env(safe-area-inset-bottom) + 9
 .interest-row .main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .interest-row b { font-size: 15px; }
 .interest-row small { color: var(--muted); font-size: 12.5px; }
+
+/* Ledger explainer */
+.ph-actions { display: flex; gap: 8px; }
+.led-intro h3 { margin-bottom: 10px; }
+.led-step { display: flex; gap: 12px; align-items: flex-start; margin: 10px 0; }
+.led-step .ico { width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); flex: none; }
+.led-step .ico svg { width: 17px; height: 17px; }
+.led-step p { margin: 0; font-size: 14px; line-height: 1.45; }
+.led-intro .btn { margin-top: 6px; }
