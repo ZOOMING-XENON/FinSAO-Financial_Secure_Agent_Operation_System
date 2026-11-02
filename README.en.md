@@ -21,6 +21,47 @@ Aegis is a simulated banking-agent system for competitions, teaching, and protot
 
 Current boundary: natural-language savings-pot creation and contribution items become `DEFERRED_UNSUPPORTED`, while other items in the same bundle continue. The structured savings UI and Core APIs remain available. Voice and receipt features depend on configuration and external services.
 
+## Hybrid AI: Form and Innovation
+
+Aegis does not use Hybrid AI as a simple vote among models. It divides work by cognitive complexity, fact reliability, and operational risk: Jev makes fast judgments, the primary LLM handles complex semantics, deterministic code validates and calculates, and Banking Core grants final authorization and executes.
+
+```mermaid
+flowchart LR
+    U[User request] --> G[Sensitive-input and injection-signal checks]
+    G --> J{Jev observation}
+    J -->|simple, single-intent, high confidence| F[Fast structured path]
+    J -->|complex, multi-intent, low confidence, or unavailable| L[Primary LLM decomposition]
+    L --> R{Valid structure?}
+    R -->|first failure| X[One structured repair]
+    X --> R
+    R -->|still unreliable| Q[Clarify with user]
+    F --> B[Task Bundle]
+    R -->|valid| B
+    B --> S[Specialized reasoning<br/>recipient ranking / derived amount / conversation]
+    S --> V[Deterministic checks<br/>provenance / Decimal / DAG / capability allowlist]
+    V --> C[Banking Core<br/>ownership / risk / grants / ledger]
+```
+
+### Four cooperating layers
+
+| Layer | Responsibility | Explicit non-responsibility |
+| --- | --- | --- |
+| **Jev fast layer** | Supplies intent, confidence, scope, and injection-risk signals for simple requests; may also label expenses and review plans | Does not decompose complex tasks, assign risk tiers, or issue grants |
+| **Primary LLM reasoning layer** | Uses recent context to decompose up to five tasks, resolve references and multi-intent language, understand bill splitting and percentages, and return strict structure | Does not supply trusted balances, internal IDs, approval results, or success facts |
+| **Deterministic verification layer** | Checks exact evidence, provenance, dependency DAGs, and tool allowlists; recalculates money with `Decimal`; validates temporary candidate keys | Does not guess ambiguous business meaning or confirm financial arguments for the user |
+| **Banking Core execution layer** | Rechecks identity, ownership, business state, and exact payload; applies Green / Yellow / Red policy and writes the ledger | Does not trust Agent or model claims about permission or completion |
+
+### What is innovative in the current implementation
+
+1. **Dynamic routing by cognitive difficulty.** A simple, high-confidence request takes the low-latency Jev path. Multi-task signals, low confidence, or Jev unavailability move the request to the primary LLM instead of discarding it.
+2. **Task Bundles represent complex conversation.** The LLM returns tasks with exact evidence and explicit dependencies. Each item can clarify, confirm, await approval, resume, or fail independently, so a form does not end the conversation.
+3. **Verified facts flow between tasks.** “Check the balance, then transfer 10%” first obtains `verified_balances` from Core. The model selects a balance reference and percentage; the server calculates the absolute amount. The model interprets meaning but cannot invent the balance.
+4. **Model inference becomes a reviewable suggestion.** Recipient ranking sees only temporary candidate keys, names, and nicknames. Inferred recipient and amount values retain `MODEL_INFERRED` provenance and require confirmation on a form bound to the exact item.
+5. **A deterministic kernel constrains probabilistic models.** Model output must pass Pydantic contracts, capability allowlists, DAG validation, idempotency, and Core authorization. Optional second-pass Jev review adds a signal but cannot override these boundaries.
+6. **Failure-aware degradation.** Provider failure, invalid structure, and missing business information lead to rule fallback, one repair, or targeted clarification. The system does not misreport “the model does not know” as “the financial operation failed.”
+
+This design keeps the LLM's flexibility for complex language while grounding financial safety in verifiable code and Core transactions. See [Algorithms](documents/Algorithm.en.md) for the execution flow and [Security](documents/Security.en.md) for the trust boundaries.
+
 ## Architecture at a glance
 
 ```mermaid
