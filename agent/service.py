@@ -10,6 +10,8 @@ from typing import Any, Protocol
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
+
 from agent.beneficiary_ranking import ModelBeneficiaryRanker
 from agent.capabilities import CapabilityBroker
 from agent.context import FactSource, SlotFact, SlotState, SlotTracker
@@ -38,7 +40,7 @@ from agent.localization import (
 from agent.planning import PlanValidationError, PlanVerifier
 from agent.responses import SafeResponseGenerator
 from agent.routing import REQUIRED_SLOTS_BY_INTENT, Intent, IntentResult, Route
-from agent.transfer_reasoning import ModelTransferReasoner
+from agent.transfer_reasoning import ModelTransferReasoner, VerifiedBalance
 from agent_tools.contracts import ExecutionContext, ToolResult, ToolResultStatus
 
 logger = logging.getLogger(__name__)
@@ -147,6 +149,7 @@ class AgentService:
                     message=request.message,
                     conversation=request.conversation,
                     request_id=request.request_id,
+                    verified_balances=self._verified_balances(context),
                 )
                 if transfer_analysis is not None and (
                     transfer_analysis.multiple_actions
@@ -155,12 +158,24 @@ class AgentService:
                         and transfer_analysis.requires_clarification
                     )
                 ):
+                    percentage_needs_balance = (
+                        intent.intent == Intent.TRANSFER
+                        and transfer_analysis.requires_clarification
+                        and transfer_analysis.percentage_requested
+                    )
                     message = (
                         "I found multiple financial actions. Please review them separately; "
                         "no action was executed."
                         if transfer_analysis.multiple_actions and is_english(request.locale)
                         else "我识别到多项资金操作。请分别审核；目前没有执行任何操作。"
                         if transfer_analysis.multiple_actions
+                        else (
+                            "I need a verified account balance to calculate this percentage. "
+                            "No transfer was made."
+                        )
+                        if percentage_needs_balance and is_english(request.locale)
+                        else "需要先确认用于计算的账户余额，才能得出转账金额；目前没有转账。"
+                        if percentage_needs_balance
                         else "I need the bill total, number of people, and who paid before "
                         "calculating the transfer. No action was executed."
                         if is_english(request.locale)
@@ -258,6 +273,26 @@ class AgentService:
                     "amount", transfer_analysis.amount, FactSource.MODEL_INFERRED
                 )
                 slot_state.missing = [name for name in slot_state.missing if name != "amount"]
+                if transfer_analysis.source_account_id is not None:
+                    slot_state.facts["source_account_id"] = SlotFact(
+                        "source_account_id",
+                        str(transfer_analysis.source_account_id),
+                        FactSource.TOOL_VERIFIED,
+                    )
+                    slot_state.missing = [
+                        name for name in slot_state.missing if name != "source_account_id"
+                    ]
+                currency_fact = slot_state.facts.get("currency")
+                if (
+                    transfer_analysis.currency is not None
+                    and (
+                        currency_fact is None
+                        or currency_fact.source == FactSource.SYSTEM_CONSTANT
+                    )
+                ):
+                    slot_state.facts["currency"] = SlotFact(
+                        "currency", transfer_analysis.currency, FactSource.TOOL_VERIFIED
+                    )
         if (
             intent.intent in {Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}
             and "expense_id" not in slot_state.facts
@@ -470,6 +505,16 @@ class AgentService:
                 )
             ),
         )
+
+    @staticmethod
+    def _verified_balances(context: TrustedAgentContext) -> list[VerifiedBalance]:
+        balances: list[VerifiedBalance] = []
+        for raw in context.verified_balances:
+            try:
+                balances.append(VerifiedBalance.model_validate(raw))
+            except ValidationError:
+                continue
+        return balances
 
     @staticmethod
     def _active_context(
@@ -740,14 +785,29 @@ class AgentService:
                         or str(item.get("nickname") or "").lower() == normalized
                     ]
                     if len(matches) == 1:
+                        matched_source = (
+                            FactSource.MODEL_INFERRED
+                            if query.source == FactSource.MODEL_INFERRED
+                            else FactSource.TOOL_VERIFIED
+                        )
                         slots.facts["destination_account_id"] = SlotFact(
                             "destination_account_id",
                             str(matches[0]["destination_account_id"]),
-                            FactSource.TOOL_VERIFIED,
+                            matched_source,
                         )
                         slots.missing = [
                             name for name in slots.missing if name != "destination_account_id"
                         ]
+                        if matched_source == FactSource.MODEL_INFERRED:
+                            display_name = localize_entity_name(
+                                matches[0].get("name"), request.locale
+                            )
+                            reason = (
+                                "It matches the person named in your request."
+                                if is_english(request.locale)
+                                else "与您这轮提到的人相符"
+                            )
+                            beneficiary_suggestion = (display_name, reason)
                 if (
                     "destination_account_id" not in slots.facts
                     and self._beneficiary_ranker is not None

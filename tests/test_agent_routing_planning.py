@@ -86,6 +86,14 @@ def test_rule_router_only_directs_exact_allowlisted_green_queries() -> None:
     assert injected.route == Route.SAFE_FALLBACK
 
 
+def test_account_id_hex_does_not_turn_a_transfer_into_an_expense() -> None:
+    routed = RuleRouter().route(
+        "先查余额，再从 2add554c-b692-4b07-9b28-c9fc9e0b7c34 "
+        "转800元到 728c9f7d-1925-4287-838f-d330ae0c1963"
+    )
+    assert routed.intent == Intent.TRANSFER
+
+
 def test_slot_tracker_records_only_explicit_financial_values() -> None:
     result = RuleRouter().route("转账 800 元")
     state = SlotTracker().extract("转账 800 元", result)

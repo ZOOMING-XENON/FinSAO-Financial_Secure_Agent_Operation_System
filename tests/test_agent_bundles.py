@@ -321,3 +321,52 @@ async def test_chat_reply_is_preserved_without_extra_composition() -> None:
     )
     assert response.bundle.status == BundleStatus.COMPLETED
     assert response.public_message == "你好！有什么可以帮你？"
+
+
+@pytest.mark.asyncio
+async def test_completed_balance_is_passed_to_dependent_transfer() -> None:
+    account_id = uuid4()
+
+    class CapturingManager:
+        def __init__(self) -> None:
+            self.transfer_balances: list[dict] | None = None
+
+        async def create(self, request: AgentRequest, context: TrustedAgentContext) -> DurableTask:
+            del request
+            if context.expected_intent == Intent.GET_BALANCE:
+                return _task(
+                    context, TaskStatus.COMPLETED,
+                    result={
+                        "account_id": str(account_id),
+                        "balance": "1440.00",
+                        "currency": "CNY",
+                    },
+                )
+            self.transfer_balances = context.verified_balances
+            assert context.expected_slots == {"percentage": 10, "recipient": "妈妈"}
+            return _task(context, TaskStatus.NEEDS_CLARIFICATION, result={})
+
+    manager = CapturingManager()
+    decomposition = TaskDecomposition.model_validate({"tasks": [
+        {"item_key": "balance", "intent": "GET_BALANCE", "evidence": "查询活期余额"},
+        {"item_key": "transfer", "intent": "TRANSFER", "evidence": "将其10%转给妈妈",
+         "depends_on": ["balance"], "proposed_slots": {"percentage": 10, "recipient": "妈妈"}},
+    ]})
+    orchestrator = ConversationOrchestrator(
+        decomposer=TaskDecomposer(FakeModelProvider(decomposition)),
+        task_manager=manager,  # type: ignore[arg-type]
+        store=MemoryBundleStore(),
+    )
+    session_id = uuid4()
+    context = TrustedAgentContext(
+        authenticated_user_id=uuid4(), session_id=session_id,
+        task_id=uuid4(), trace_id=uuid4(),
+    )
+    await orchestrator.handle_turn(
+        AgentTurnRequest(session_id=session_id, message="查询活期余额，并且将其10%转给妈妈"),
+        context,
+    )
+    assert manager.transfer_balances == [{
+        "ref": "balance", "account_id": str(account_id),
+        "balance": "1440.00", "currency": "CNY",
+    }]

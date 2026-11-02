@@ -182,6 +182,7 @@ def build_runtime_agent_graph(
                 else None
             ),
             expected_slots=raw_context.get("expected_slots") or {},
+            verified_balances=raw_context.get("verified_balances") or [],
         )
         response = await service.handle(request, context)
         return {

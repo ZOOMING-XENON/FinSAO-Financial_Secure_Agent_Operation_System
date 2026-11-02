@@ -267,6 +267,22 @@ class ConversationOrchestrator:
             request, context,
             expected_intent=None if item.intent == Intent.UNKNOWN else item.intent,
             expected_slots=item.proposed_slots,
+            verified_balances=[
+                {
+                    "ref": completed.item_key,
+                    "account_id": completed.result["account_id"],
+                    "balance": completed.result["balance"],
+                    "currency": completed.result["currency"],
+                }
+                for completed in bundle.items
+                if completed.intent == Intent.GET_BALANCE
+                and completed.status == BundleItemStatus.COMPLETED
+                and isinstance(completed.result, dict)
+                and all(
+                    key in completed.result
+                    for key in ("account_id", "balance", "currency")
+                )
+            ],
         )
         clarification = None
         if isinstance(task.result, dict) and isinstance(task.result.get("clarification"), dict):
@@ -297,6 +313,7 @@ class ConversationOrchestrator:
         self, request: AgentRequest, parent_context: TrustedAgentContext,
         expected_intent: Intent | None = None,
         expected_slots: dict[str, JsonValue] | None = None,
+        verified_balances: list[dict[str, JsonValue]] | None = None,
     ) -> DurableTask:
         context = TrustedAgentContext(
             authenticated_user_id=parent_context.authenticated_user_id,
@@ -305,6 +322,7 @@ class ConversationOrchestrator:
             trace_id=parent_context.trace_id,
             expected_intent=expected_intent,
             expected_slots=expected_slots,
+            verified_balances=verified_balances,
         )
         return await self._tasks.create(request, context)
 
