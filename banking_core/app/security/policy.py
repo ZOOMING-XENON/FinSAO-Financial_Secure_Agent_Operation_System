@@ -23,17 +23,21 @@ class PolicyEngine:
         local_now = (now or datetime.now(UTC)).astimezone(BUSINESS_TIMEZONE)
         start_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
         start_utc = start_local.astimezone(UTC)
-        statuses = [
-            TransferStatus.PENDING_AUTHORIZATION,
-            TransferStatus.AUTHORIZED,
-            TransferStatus.PROCESSING,
-            TransferStatus.COMPLETED,
-        ]
+        settled = [TransferStatus.PROCESSING, TransferStatus.COMPLETED]
+        reserved = [TransferStatus.PENDING_AUTHORIZATION, TransferStatus.AUTHORIZED]
+        # A draft the user walked away from keeps its PENDING status until someone tries to
+        # commit it, so only drafts that can still be committed (not past expires_at) reserve
+        # part of the daily limit. Otherwise abandoned attempts would push small transfers to RED.
+        now_utc = (now or datetime.now(UTC)).astimezone(UTC)
         total = self.session.scalar(
             select(func.coalesce(func.sum(TransferDraftModel.amount), 0)).where(
                 TransferDraftModel.user_id == actor_id,
-                TransferDraftModel.status.in_(statuses),
                 TransferDraftModel.created_at >= start_utc,
+                TransferDraftModel.status.in_(settled)
+                | (
+                    TransferDraftModel.status.in_(reserved)
+                    & (TransferDraftModel.expires_at > now_utc)
+                ),
             )
         )
         return Decimal(total or 0)

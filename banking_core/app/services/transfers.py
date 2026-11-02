@@ -246,6 +246,39 @@ class TransferService:
         )
         return transaction
 
+    def cancel_transfer(self, draft_id: UUID, user_id: UUID) -> TransferDraftModel:
+        """Cancel a transfer the user decided not to send, so it no longer reserves part of
+        the daily limit. Only drafts that have not been authorized can be cancelled; doing it
+        twice is harmless."""
+        if self.session.in_transaction():
+            self.session.rollback()
+        with self.session.begin():
+            draft = self.session.scalar(
+                select(TransferDraftModel)
+                .where(TransferDraftModel.id == draft_id)
+                .with_for_update()
+            )
+            if draft is None:
+                raise NotFoundError("transfer draft not found")
+            if draft.user_id != user_id:
+                raise ForbiddenError("transfer belongs to another user")
+            if draft.status != TransferStatus.CANCELLED:
+                transition(draft, TransferStatus.CANCELLED)
+                self.session.add(
+                    AuditEventModel(
+                        id=uuid4(),
+                        actor_user_id=user_id,
+                        action="transfer.cancel",
+                        resource_type="transfer_draft",
+                        resource_id=str(draft.id),
+                        trace_id=current_trace_id(),
+                        outcome="CANCELLED",
+                        details={"amount": str(draft.amount)},
+                    )
+                )
+        self.session.refresh(draft)
+        return draft
+
     def get_transfer_status(self, transfer_id: UUID, user_id: UUID) -> TransferDraftModel:
         draft = self.session.scalar(
             select(TransferDraftModel).where(

@@ -1,12 +1,14 @@
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from banking_core.app.config import get_settings
 from banking_core.app.domain.enums import (
     AccountStatus,
     Currency,
@@ -19,6 +21,7 @@ from banking_core.app.persistence.models import (
     AccountModel,
     AuditEventModel,
     SavingsContributionModel,
+    SavingsInterestPaymentModel,
     SavingsPotModel,
     TransactionModel,
 )
@@ -33,6 +36,76 @@ from banking_core.app.services.errors import (
 from banking_core.app.services.ledger import LedgerService
 from shared.tracing import current_trace_id
 
+BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
+CENT = Decimal("0.01")
+CARRY = Decimal("0.00000001")
+DAYS_PER_YEAR = Decimal(365)
+
+
+def business_today() -> date:
+    return datetime.now(BUSINESS_TZ).date()
+
+
+def accrue_pot_interest(session: Session, pot: SavingsPotModel, today: date) -> Decimal:
+    """Credit simple daily interest on the pot's balance up to (not including) today.
+
+    Interest is worked out on whole business days at the pot's annual rate (365-day year).
+    Sub-cent amounts are carried in ``interest_carry`` and paid once they reach a cent, so
+    nothing is lost to rounding. Callers run this before any balance change, which makes each
+    day's interest use the balance the pot really had that day.
+
+    Pot money is held in the system settlement account, which is also the bank's equity
+    account. Paying interest therefore moves value from bank equity to the customer's pot
+    inside that same account: the pot balance grows, the account balance does not change, and
+    no ledger posting is needed. Each credit is recorded as a payment row and an audit event.
+    Returns the amount paid now (0.00 if none).
+    """
+    start = pot.interest_accrued_until or pot.created_at.astimezone(BUSINESS_TZ).date()
+    days = (today - start).days
+    if days <= 0:
+        return Decimal("0.00")
+    balance = pot.saved_amount
+    accrued = pot.interest_carry + balance * pot.interest_rate * days / DAYS_PER_YEAR
+    paid = accrued.quantize(CENT, rounding=ROUND_DOWN)
+    pot.interest_carry = (accrued - paid).quantize(CARRY, rounding=ROUND_DOWN)
+    pot.interest_accrued_until = today
+    if paid <= 0:
+        return Decimal("0.00")
+    pot.saved_amount += paid
+    pot.interest_earned += paid
+    pot.status = "COMPLETED" if pot.saved_amount >= pot.target_amount else "ACTIVE"
+    session.add(
+        SavingsInterestPaymentModel(
+            id=uuid4(),
+            pot_id=pot.id,
+            user_id=pot.user_id,
+            period_start=start,
+            period_end=today,
+            rate=pot.interest_rate,
+            balance=balance,
+            amount=paid,
+        )
+    )
+    session.add(
+        AuditEventModel(
+            id=uuid4(),
+            actor_user_id=pot.user_id,
+            action="savings.interest",
+            resource_type="savings_pot",
+            resource_id=str(pot.id),
+            trace_id=current_trace_id(),
+            outcome="COMPLETED",
+            details={
+                "period_start": start.isoformat(),
+                "period_end": today.isoformat(),
+                "rate": str(pot.interest_rate),
+                "balance": str(balance),
+                "amount": str(paid),
+            },
+        )
+    )
+    return paid
+
 
 class SavingsPotService:
     """Account-funded savings goals with authorized, ledger-backed contributions."""
@@ -40,7 +113,8 @@ class SavingsPotService:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def list(self, user_id: UUID) -> list[SavingsPotModel]:
+    def list(self, user_id: UUID, *, today: date | None = None) -> list[SavingsPotModel]:
+        self.accrue_interest(user_id, today=today)
         return list(
             self.session.scalars(
                 select(SavingsPotModel)
@@ -49,13 +123,52 @@ class SavingsPotService:
             )
         )
 
-    def get(self, pot_id: UUID, user_id: UUID) -> SavingsPotModel:
+    def get(self, pot_id: UUID, user_id: UUID, *, today: date | None = None) -> SavingsPotModel:
+        pot = self._owned(pot_id, user_id)
+        self.accrue_interest(user_id, today=today, pot_id=pot_id)
+        self.session.refresh(pot)
+        return pot
+
+    def _owned(self, pot_id: UUID, user_id: UUID) -> SavingsPotModel:
         pot = self.session.get(SavingsPotModel, pot_id)
         if pot is None:
             raise NotFoundError("savings pot not found")
         if pot.user_id != user_id:
             raise ForbiddenError("savings pot belongs to another user")
         return pot
+
+    def accrue_interest(
+        self, user_id: UUID, *, today: date | None = None, pot_id: UUID | None = None
+    ) -> Decimal:
+        """Bring the user's pots (or one pot) up to date with interest. Safe to call repeatedly:
+        a pot is credited at most once per business day."""
+        today = today or business_today()
+        query = select(SavingsPotModel).where(
+            SavingsPotModel.user_id == user_id,
+            (SavingsPotModel.interest_accrued_until.is_(None))
+            | (SavingsPotModel.interest_accrued_until < today),
+        )
+        if pot_id is not None:
+            query = query.where(SavingsPotModel.id == pot_id)
+        if self.session.in_transaction():
+            self.session.commit()
+        total = Decimal("0.00")
+        with self.session.begin():
+            for pot in self.session.scalars(query.order_by(SavingsPotModel.id).with_for_update()):
+                total += accrue_pot_interest(self.session, pot, today)
+        return total
+
+    def list_interest(self, pot_id: UUID, user_id: UUID) -> Sequence[SavingsInterestPaymentModel]:
+        self.get(pot_id, user_id)
+        return list(
+            self.session.scalars(
+                select(SavingsInterestPaymentModel)
+                .where(SavingsInterestPaymentModel.pot_id == pot_id)
+                .order_by(
+                    SavingsInterestPaymentModel.period_end.desc(), SavingsInterestPaymentModel.id
+                )
+            )
+        )
 
     def create(
         self,
@@ -93,6 +206,8 @@ class SavingsPotService:
             status="ACTIVE",
             allocation_mode="ACCOUNT_FUNDED",
             idempotency_key=idempotency_key,
+            interest_rate=get_settings().savings_interest_rate,
+            interest_accrued_until=business_today(),
         )
         self.session.add(pot)
         try:
@@ -188,6 +303,8 @@ class SavingsPotService:
                 raise NotFoundError("savings pot not found")
             if pot.user_id != user_id:
                 raise ForbiddenError("savings pot belongs to another user")
+            # Interest up to today is earned on the balance before this deposit.
+            accrue_pot_interest(self.session, pot, business_today())
             accounts = list(
                 self.session.scalars(
                     select(AccountModel)

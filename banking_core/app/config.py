@@ -1,3 +1,4 @@
+from decimal import Decimal
 from functools import lru_cache
 from uuid import UUID
 
@@ -18,6 +19,8 @@ class Settings(BaseSettings):
     banking_service_token: SecretStr = SecretStr("development-only")
     labeling_service_token: SecretStr = SecretStr("development-labeling-only")
     labeling_service_user_id: UUID | None = None
+    # Annual interest rate given to new savings pots (0.015 = 1.5%). Existing pots keep theirs.
+    savings_interest_rate: Decimal = Field(default=Decimal("0.0150"), ge=0, lt=1)
 
     @field_validator("labeling_service_user_id", "development_user_id", mode="before")
     @classmethod

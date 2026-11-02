@@ -74,5 +74,10 @@
 	<string>Aegis listens when you tap the voice button so you can talk to your money assistant.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Aegis turns what you say into text so it can answer your question.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

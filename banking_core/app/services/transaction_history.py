@@ -111,12 +111,11 @@ class TransactionHistoryService:
         ).all()
         items: dict[UUID, TransactionHistoryItem] = {}
         for transaction, entry in bank_rows:
+            # A transfer is DEBIT/CREDIT only when the other side is another customer. Both legs
+            # in the user's own accounts (handled below), or the other leg in a system account
+            # (savings pots, investments: the money is still the user's), make it a MOVE.
             direction = (
-                TransactionDirection.MOVE
-                if transaction.kind == TransactionKind.TRANSFER
-                else TransactionDirection.DEBIT
-                if entry.credit > 0
-                else TransactionDirection.CREDIT
+                TransactionDirection.DEBIT if entry.credit > 0 else TransactionDirection.CREDIT
             )
             existing = items.get(transaction.id)
             if existing is None:
@@ -130,6 +129,29 @@ class TransactionHistoryService:
                     transaction=existing.transaction,
                     direction=TransactionDirection.MOVE,
                     account_id=existing.account_id,
+                )
+        single_leg_transfers = [
+            tid
+            for tid, item in items.items()
+            if item.transaction.kind == TransactionKind.TRANSFER
+            and item.direction != TransactionDirection.MOVE
+        ]
+        if single_leg_transfers:
+            to_system = set(
+                self.session.scalars(
+                    select(LedgerEntryModel.transaction_id)
+                    .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
+                    .where(
+                        LedgerEntryModel.transaction_id.in_(single_leg_transfers),
+                        AccountModel.is_system.is_(True),
+                    )
+                )
+            )
+            for tid in to_system:
+                items[tid] = TransactionHistoryItem(
+                    transaction=items[tid].transaction,
+                    direction=TransactionDirection.MOVE,
+                    account_id=items[tid].account_id,
                 )
         manual_rows = self.session.scalars(
             select(TransactionModel).where(

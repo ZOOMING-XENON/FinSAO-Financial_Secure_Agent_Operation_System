@@ -107,6 +107,18 @@ export function PotDetail({ id }: { id: string }) {
           ))}
         </div>
 
+        {p && p.interest_rate !== undefined && (
+          <div className="interest-row">
+            <span className="ico">
+              <Icon name="i-trend-up" />
+            </span>
+            <span className="main">
+              <b>{t('pot.interest', { rate: (Number(p.interest_rate) * 100).toFixed(2) })}</b>
+              <small>{t('pot.interestEarned', { amount: m$(toCents(p.interest_earned ?? '0')), month: m$((toCents(p.saved_amount) * BigInt(Math.round(Number(p.interest_rate) * 1_000_000))) / 12_000_000n) })}</small>
+            </span>
+          </div>
+        )}
+
         {p && plan && (
           <>
             <div className="quick-add">

@@ -61,6 +61,14 @@ export function buildInbox(input: {
     else items.push({ id: `goal-${p.id}-${plan.pct}`, tone: plan.gap < -10000n ? 'warn' : 'good', icon: 'i-target', key: 'inbox.goal', vars: { name: p.name, amount: money(plan.remaining), pct: plan.pct }, href: '#/pot/' + p.id, at: null });
   }
 
+  // Interest paid into savings pots.
+  for (const p of pots) {
+    const earned = toCents(p.interest_earned ?? '0');
+    if (earned > 0n && p.interest_rate) {
+      items.push({ id: `pot-interest-${p.id}-${today.toISOString().slice(0, 7)}`, tone: 'good', icon: 'i-trend-up', key: 'inbox.potInterest', vars: { name: p.name, amount: money(earned), rate: (Number(p.interest_rate) * 100).toFixed(2) }, href: '#/pot/' + p.id, at: null });
+    }
+  }
+
   // Investment payouts (dividends, interest) in the last 45 days.
   for (const t of tx) {
     if (!t.posted_at || now - Date.parse(t.posted_at) > 45 * DAY || isSpend(t)) continue;

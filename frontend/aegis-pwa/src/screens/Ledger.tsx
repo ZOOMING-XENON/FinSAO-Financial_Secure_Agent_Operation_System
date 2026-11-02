@@ -1,15 +1,19 @@
-// Cash ledger: record spending and income the bank can't see (cash, a friend paid).
-// Banking Core has no endpoint for manual entries, so these stay on this device only.
+// Cash ledger: record spending and income the bank can't see (cash, a friend paid), and sort
+// card payments that still need a category. Cash entries stay on this device.
 import { useEffect, useState } from 'react';
-import { uid } from '../core/api';
+import { api, uid } from '../core/api';
 import { currentMonth, monthKey, shiftMonth, type Month } from '../core/insights';
-import { formatDate, monthLabel } from '../core/format';
+import { categoryKey, direction, formatDate, monthLabel } from '../core/format';
+import { PICKABLE, type Category, type Transaction } from '../core/types';
+import { loadAccounts, loadRecent } from './Home';
 import { formatMoney, fromCents, toCents } from '../core/money';
 import type { Key } from '../core/i18n';
-import { useApp } from '../app/state';
+import { useApp, useLoad } from '../app/state';
 import { Icon, Sheet } from '../ui/kit';
 import { haptic } from '../ui/celebrate';
 import { lastAddedMonth, readLedger, writeLedger, type LedgerEntry, type LedgerKind } from '../core/ledger';
+
+const INTRO_KEY = 'aegis.ledgerIntroSeen';
 
 type Kind = LedgerKind;
 type Entry = LedgerEntry;
@@ -57,7 +61,7 @@ export function evalAmount(expr: string): bigint | null {
 }
 
 export function Ledger({ startRecording = false }: { startRecording?: boolean }) {
-  const { t, locale, toast } = useApp();
+  const { t, locale, toast, errorText } = useApp();
   const [entries, setEntries] = useState<Entry[]>(readEntries);
   const [month, setMonth] = useState<Month>(() => {
     if (!lastAddedMonth) return currentMonth();
@@ -66,6 +70,35 @@ export function Ledger({ startRecording = false }: { startRecording?: boolean })
   });
   const [recording, setRecording] = useState(startRecording);
   const [editing, setEditing] = useState<Entry | null>(null);
+  const [intro, setIntro] = useState(() => {
+    try {
+      return localStorage.getItem(INTRO_KEY) !== '1';
+    } catch {
+      return true;
+    }
+  });
+  const closeIntro = () => {
+    setIntro(false);
+    try {
+      localStorage.setItem(INTRO_KEY, '1');
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  // Card payments this month that still have no category: sorted here or in the pop-up.
+  const bank = useLoad(async () => (await loadRecent(await loadAccounts(), 200)).filter(x => direction(x) === 'out' && !x.cash && x.category !== 'INTERNAL_TRANSFER'));
+  const unsorted = (bank.data ?? []).filter(x => (x.posted_at ?? '').startsWith(monthKey(month)) && categoryKey(x.category) === 'UNKNOWN');
+  const [sorting, setSorting] = useState<Transaction | null>(null);
+  const sortAs = async (tx: Transaction, category: Category) => {
+    try {
+      await api.patch(`/transactions/${tx.id}/category`, { category });
+      toast(t('track.saved', { cat: t(`cat.${category}`) }));
+      setSorting(null);
+      bank.reload();
+    } catch (e) {
+      toast(errorText(e));
+    }
+  };
   const mine = entries.filter(e => e.at.startsWith(monthKey(month))).sort((a, b) => b.at.localeCompare(a.at));
   const out = mine.filter(e => e.kind === 'out').reduce((s, e) => s + toCents(e.cents), 0n);
   const inc = mine.filter(e => e.kind === 'in').reduce((s, e) => s + toCents(e.cents), 0n);
@@ -97,10 +130,44 @@ export function Ledger({ startRecording = false }: { startRecording?: boolean })
           <Icon name="i-back" />
         </a>
         <h2>{t('svc.ledger')}</h2>
-        <button className="icon-btn brand" onClick={() => setRecording(true)} aria-label={t('led.record')}>
-          <Icon name="i-plus" />
-        </button>
+        <span className="ph-actions">
+          {!intro && (
+            <button className="icon-btn" onClick={() => setIntro(true)} aria-label={t('led.how')}>
+              <Icon name="i-info" />
+            </button>
+          )}
+          <button className="icon-btn brand" onClick={() => setRecording(true)} aria-label={t('led.record')}>
+            <Icon name="i-plus" />
+          </button>
+        </span>
       </div>
+
+      {intro && (
+        <section className="card led-intro">
+          <h3>{t('led.how')}</h3>
+          <div className="led-step">
+            <span className="ico">
+              <Icon name="i-card" />
+            </span>
+            <p>{t('led.howCard')}</p>
+          </div>
+          <div className="led-step">
+            <span className="ico">
+              <Icon name="i-book" />
+            </span>
+            <p>{t('led.howCash')}</p>
+          </div>
+          <div className="led-step">
+            <span className="ico">
+              <Icon name="i-chart" />
+            </span>
+            <p>{t('led.howBoth')}</p>
+          </div>
+          <button className="btn primary" onClick={closeIntro}>
+            {t('led.gotIt')}
+          </button>
+        </section>
+      )}
       <div className="cal-head">
         <button className="icon-btn" aria-label={t('trends.prev')} onClick={() => setMonth(shiftMonth(month, -1))}>
           <Icon name="i-left" />
@@ -124,6 +191,55 @@ export function Ledger({ startRecording = false }: { startRecording?: boolean })
         <Icon name="i-phone" />
         {t('led.device')}
       </p>
+
+      {unsorted.length > 0 && (
+        <section className="card flush">
+          <div className="card-h">
+            <h3>{t('led.toSort')}</h3>
+            <span className="badge YELLOW">{unsorted.length}</span>
+          </div>
+          <p className="mut small" style={{ margin: '0 16px 6px' }}>
+            {t('led.toSortHint')}
+          </p>
+          {unsorted.map(x => (
+            <button className="row" key={x.id} onClick={() => setSorting(x)}>
+              <span className="ico">
+                <Icon name="i-card" />
+              </span>
+              <span className="main">
+                <span className="t" style={{ display: 'block' }}>
+                  {x.description}
+                </span>
+                <span className="s" style={{ display: 'block' }}>
+                  {formatDate(x.posted_at, locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </span>
+              <span className="v">-{formatMoney(x.amount, x.currency)}</span>
+            </button>
+          ))}
+        </section>
+      )}
+
+      <Sheet open={!!sorting} onClose={() => setSorting(null)} label={t('newtx.title')}>
+        {sorting && (
+          <>
+            <h3>{t('newtx.title')}</h3>
+            <p className="sub">
+              {sorting.description} · {formatMoney(sorting.amount, sorting.currency)}
+            </p>
+            <div className="cat-pick">
+              {PICKABLE.map(c => (
+                <button key={c} onClick={() => sortAs(sorting, c)}>
+                  <span className="ico">
+                    <Icon name={'c-' + c} />
+                  </span>
+                  {t(`cat.${c}`)}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </Sheet>
 
       {mine.length === 0 && (
         <section className="card center">

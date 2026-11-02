@@ -74,7 +74,15 @@ const db = {
   db.balances[CHECKING] += demo.netCents;
   demo.budgets.forEach((b, i) => db.budgets.push({ id: U(520 + i), ...b, currency: 'CNY' }));
   db.subs = demo.subs.map((x, i) => ({ id: U(400 + i), ...x, currency: 'CNY', active: true, status: 'ACTIVE', cancelled_at: null }));
-  db.pots = demo.pots.map((x, i) => ({ id: U(700 + i), ...x, currency: 'CNY', status: 'ACTIVE', allocation_mode: 'ACCOUNT_FUNDED', updated_at: x.created_at }));
+  db.pots = demo.pots.map((x, i) => {
+    // Interest at 1.5% a year on the saved amount since the pot was opened (demo approximation).
+    const days = Math.max(0, Math.floor((Date.now() - Date.parse(String(x.created_at))) / 86_400_000));
+    const earned = (toCents(String(x.saved_amount)) * 150n * BigInt(days)) / (10_000n * 365n);
+    return {
+      id: U(700 + i), ...x, currency: 'CNY', status: 'ACTIVE', allocation_mode: 'ACCOUNT_FUNDED', updated_at: x.created_at,
+      interest_rate: '0.0150', interest_earned: fromCents(earned), interest_accrued_until: new Date().toISOString().slice(0, 10),
+    };
+  });
   db.pots.forEach(pot => {
     const parts = 4n;
     const total = toCents(String(pot.saved_amount));
@@ -108,7 +116,8 @@ const YELLOW_OPS = new Set(['subscription.cancel', 'card.limit', 'card.freeze', 
 function todayOutgoing(): bigint {
   const day = now().slice(0, 10);
   return Object.values(db.drafts)
-    .filter(d => d.created.startsWith(day) && d.status !== 'CANCELLED' && d.status !== 'EXPIRED')
+    // Like Banking Core: completed transfers count, pending ones only until they expire.
+    .filter(d => d.created.startsWith(day) && (d.status === 'COMPLETED' || (d.status === 'PENDING_AUTHORIZATION' && Date.parse(String(d.expires_at)) > Date.now())))
     .reduce((sum, d) => sum + toCents(d.amount), 0n);
 }
 
@@ -173,7 +182,8 @@ export function mockCore(method: string, path: string, q: Record<string, string>
       .slice(offset, offset + limit)
       .map(t => ({
         ...publicTx(t),
-        direction: t.category === 'INTERNAL_TRANSFER' ? 'MOVE' : t.out ? 'DEBIT' : 'CREDIT',
+        // Demo transfers go to other people (money out); pots and investments stay the user's.
+        direction: t.category === 'SAVINGS' || t.category === 'WEALTH' ? 'MOVE' : t.out ? 'DEBIT' : 'CREDIT',
         kind: t.category === 'INTERNAL_TRANSFER' ? 'TRANSFER' : t.category === 'OPENING_BALANCE' ? 'OPENING_BALANCE' : t.out ? 'EXPENSE' : 'INCOME',
         origin: 'BANK',
       }));
@@ -234,6 +244,14 @@ export function mockCore(method: string, path: string, q: Record<string, string>
   if (method === 'GET' && (r = m(/^\/transfers\/(?:drafts\/)?([^/]+)$/))) {
     const d = db.drafts[r[1]];
     if (!d) return err(404, 'NOT_FOUND');
+    const { created: _c, ...pub } = d;
+    return [200, pub];
+  }
+  if (method === 'POST' && (r = m(/^\/transfers\/([^/]+)\/cancel$/))) {
+    const d = db.drafts[r[1]];
+    if (!d) return err(404, 'NOT_FOUND');
+    if (d.status === 'COMPLETED') return err(409, 'CONFLICT', 'invalid transfer transition');
+    d.status = 'CANCELLED';
     const { created: _c, ...pub } = d;
     return [200, pub];
   }
@@ -400,11 +418,18 @@ export function mockCore(method: string, path: string, q: Record<string, string>
     if (db.idem[key]) return [201, db.idem[key]];
     const pot = {
       id: rid(), name: b.name, target_amount: b.target_amount, saved_amount: '0.00', currency: 'CNY', target_date: b.target_date,
+      interest_rate: '0.0150', interest_earned: '0.00', interest_accrued_until: now().slice(0, 10),
       status: 'ACTIVE', allocation_mode: 'ACCOUNT_FUNDED', created_at: now(), updated_at: now(),
     };
     db.pots.push(pot);
     db.idem[key] = pot;
     return [201, pot];
+  }
+  if (method === 'GET' && (r = m(/^\/savings-pots\/([^/]+)\/interest$/))) {
+    const pot = db.pots.find(p => p.id === r![1]);
+    if (!pot) return err(404, 'NOT_FOUND', 'savings pot not found');
+    const earned = toCents(String(pot.interest_earned ?? '0'));
+    return [200, earned > 0n ? [{ id: rid(), pot_id: pot.id, period_start: String(pot.created_at).slice(0, 10), period_end: pot.interest_accrued_until, rate: '0.0150', balance: pot.saved_amount, amount: fromCents(earned), created_at: now() }] : []];
   }
   if ((r = m(/^\/savings-pots\/([^/]+)(\/contributions)?$/))) {
     const pot = db.pots.find(p => p.id === r![1] && p.status !== 'DELETED');

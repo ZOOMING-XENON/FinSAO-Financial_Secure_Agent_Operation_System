@@ -33,6 +33,8 @@ from banking_core.app.domain.enums import (
 )
 
 MONEY = Numeric(precision=18, scale=2, asdecimal=True)
+INTEREST_RATE = Numeric(precision=6, scale=4, asdecimal=True)  # 0.0150 = 1.5% a year
+INTEREST_CARRY = Numeric(precision=18, scale=8, asdecimal=True)
 
 
 def enum_column(enum_type: type[Any], name: str) -> Enum:
@@ -351,6 +353,9 @@ class SavingsPotModel(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("target_amount > 0", name="ck_savings_pot_positive_target"),
         CheckConstraint("saved_amount >= 0", name="ck_savings_pot_nonnegative_saved"),
+        CheckConstraint(
+            "interest_rate >= 0 AND interest_rate < 1", name="ck_savings_pot_interest_rate"
+        ),
         UniqueConstraint("user_id", "idempotency_key", name="uq_savings_pot_user_key"),
     )
 
@@ -368,6 +373,18 @@ class SavingsPotModel(TimestampMixin, Base):
         String(32), default="ACCOUNT_FUNDED", nullable=False
     )
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Interest: annual rate, the date interest has been credited up to, sub-cent interest not
+    # yet paid out (carried to the next payment), and the running total paid into the pot.
+    interest_rate: Mapped[Decimal] = mapped_column(
+        INTEREST_RATE, default=Decimal("0.0150"), server_default="0.0150", nullable=False
+    )
+    interest_accrued_until: Mapped[date | None] = mapped_column(Date)
+    interest_carry: Mapped[Decimal] = mapped_column(
+        INTEREST_CARRY, default=Decimal("0"), server_default="0", nullable=False
+    )
+    interest_earned: Mapped[Decimal] = mapped_column(
+        MONEY, default=Decimal("0.00"), server_default="0", nullable=False
+    )
 
 
 class SavingsContributionModel(Base):
@@ -387,6 +404,31 @@ class SavingsContributionModel(Base):
     amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     note: Mapped[str | None] = mapped_column(String(255))
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SavingsInterestPaymentModel(Base):
+    """One interest credit to a savings pot, covering the days from period_start to period_end."""
+
+    __tablename__ = "savings_interest_payments"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_savings_interest_positive"),
+        CheckConstraint("period_end > period_start", name="ck_savings_interest_period"),
+        UniqueConstraint("pot_id", "period_end", name="uq_savings_interest_pot_period"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    pot_id: Mapped[UUID] = mapped_column(
+        ForeignKey("savings_pots.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    rate: Mapped[Decimal] = mapped_column(INTEREST_RATE, nullable=False)
+    balance: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
