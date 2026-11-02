@@ -1,156 +1,146 @@
-# FinSAO 前端与后端联调
+[中文](README.md) | [English](README.en.md)
 
-`demo-final/` 是同学提供的零依赖单页前端。本次接入保留了原有视觉和 Banking Core 业务流程，并连接当前仓库的两个后端进程：
+# 前端
+
+这个目录包含两个前端，都通过同一个本地代理连接仓库里的两个后端进程：
+
+| 目录 | 内容 | 端口 |
+|---|---|---|
+| [`aegis-pwa/`](aegis-pwa/README.md) | **主应用 Aegis**：React + TypeScript PWA，可通过 Capacitor 打包为 iOS / Android 应用。比赛演示使用这一个 | `5174` |
+| [`demos/`](demos/) | 早期的零依赖单页原型（`index.html` + `server.mjs`），以及设计稿和架构图，保留作参考 | `5173` |
 
 ```text
-浏览器 http://127.0.0.1:5173
-  ├─ /api/core/*  → Banking Core http://127.0.0.1:8000
-  └─ /api/agent/* → Agent API    http://127.0.0.1:8100
+浏览器 / iOS 应用
+  └─ 前端服务（server.mjs，同源代理，在服务端注入服务令牌）
+       ├─ /api/core/*  → Banking Core  http://127.0.0.1:8000
+       └─ /api/agent/* → Agent API     http://127.0.0.1:8100
 ```
 
-前端服务负责同源代理，因此不需要放宽后端 CORS。Jev 未接入、未调用，也不影响现有功能；当前 `.env` 使用 `AGENT_ROUTING_MODE=llm_only`，安全输入先经 LLM 生成结构化意图和候选参数，执行仍由 `PlanVerifier + ToolGateway` 控制。`RuleRouter` 保留在代码中，便于之后对照延迟和效果，但当前不承担正常业务路由。
+前端服务负责同源代理，因此不需要放宽后端 CORS。功能、界面截图和 iOS 打包方法见 [`aegis-pwa/README.md`](aegis-pwa/README.md)。
 
 ## 前置条件
 
-- Python 3.11+，仓库依赖已经安装到 `.venv`。
-- PostgreSQL 已启动并已执行迁移、种子脚本。
-- Node.js 18+；前端没有 npm 依赖，不需要 `npm install`。
-- 根目录 `.env` 至少设置：
+| 软件 | 版本 | 用途 |
+|---|---|---|
+| Python | **3.12** | Banking Core、Agent、迁移 |
+| Node.js | **22.12+** | Aegis（Vite 8、Capacitor 8） |
+| Docker Desktop | 近期稳定版 | 运行 PostgreSQL |
+| Xcode | 可选 | 在 iPhone / 模拟器上运行 Aegis |
+
+## 一次性准备（macOS / Linux）
+
+在仓库根目录执行（Windows 见根目录 [`README.md`](../README.md)）：
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp .env.example .env
+docker compose up -d db
+python -m alembic upgrade head
+python -m scripts.seed_demo_data
+```
+
+在宿主机上运行 Core 和 Agent 时，要把 `.env` 中数据库地址的主机名 `db` 改成 `127.0.0.1`（`db` 只在 Docker 内部有效）：
+
+```bash
+sed -i '' 's/@db:5432/@127.0.0.1:5432/g' .env   # macOS；Linux 去掉 ''
+```
+
+`.env` 中与前端联调相关的关键项：
 
 ```dotenv
-APP_ENV=development
-DATABASE_URL=postgresql+psycopg://banking:banking@localhost:5432/banking
-DEVELOPMENT_USER_ID=<演示用户 UUID>
-AGENT_DEVELOPMENT_USER_ID=<与 DEVELOPMENT_USER_ID 相同的 UUID>
+DEVELOPMENT_USER_ID=900fefe8-ceba-516d-8d05-5cfff313fa65        # 演示用户 Lin
+AGENT_DEVELOPMENT_USER_ID=900fefe8-ceba-516d-8d05-5cfff313fa65  # 与上面相同
 MOCK_MFA_CODE=123456
 BANKING_BASE_URL=http://127.0.0.1:8000
 BANKING_SERVICE_TOKEN=development-only
 AGENT_API_TOKEN=development-agent-only
-MODEL_PROVIDER=deepseek
-AGENT_ROUTING_MODE=llm_only
+MODEL_PROVIDER=offline        # 或 deepseek / qwen / local，并填写对应 API Key
+AGENT_ROUTING_MODE=hybrid     # llm_only 时模型不可用就无法回答，见下方常见问题
 ```
 
-生成确定性的 Lin 演示用户 UUID：
-
-```powershell
-uv run python -c "from scripts.seed_demo_data import stable_id; print(stable_id('user:lin'))"
-```
-
-身份只由 Core/Agent 服务端环境变量注入。浏览器请求不能提交或覆盖 `user_id`、风险等级、MFA、approval 或授权引用。Node 代理会覆盖浏览器提供的 `Authorization`，分别注入 Core 和 Agent 的开发服务令牌；示例值只能用于本机开发，部署前必须替换。
+上面的 UUID 是种子脚本中 `user:lin` 的固定值，可用 `python -c "from scripts.seed_demo_data import stable_id; print(stable_id('user:lin'))"` 核对。
 
 ## 启动顺序
 
-在仓库根目录分别打开三个终端。
+打开三个终端，前两个先在仓库根目录执行 `source .venv/bin/activate`。
 
-### 1. Banking Core
+**1. Banking Core**
 
-```powershell
-uv run alembic upgrade head
-uv run python -m scripts.seed_demo_data
-uv run uvicorn banking_core.app.main:app --host 127.0.0.1 --port 8000
+```bash
+python -m uvicorn banking_core.app.main:app --host 127.0.0.1 --port 8000
 ```
 
-检查：`http://127.0.0.1:8000/health`。
+**2. Agent API**
 
-### 2. Agent API
-
-```powershell
-uv run uvicorn agent.app:app --host 127.0.0.1 --port 8100
+```bash
+python -m uvicorn agent.app:app --host 127.0.0.1 --port 8100
 ```
 
-检查：`http://127.0.0.1:8100/openapi.json`。
+**3. Aegis**
 
-### 3. 前端
+```bash
+cd frontend/aegis-pwa
+npm ci
+npm run build && npm run serve
+```
 
-```powershell
-cd frontend/demo-final
+打开 <http://127.0.0.1:5174>。页面顶部**没有**紫色「演示模式」提示条，就说明 Core 和 Agent 都已连接。
+
+在 iPhone 模拟器中运行：保持第 3 步运行，另开终端执行 `VITE_API_BASE=http://localhost:5174 npm run cap:ios`，在 Xcode 中选择 Team 后点 ▶。真机和录屏方法见 [`aegis-pwa/README.md`](aegis-pwa/README.md)。
+
+**早期原型（可选）**
+
+```bash
+cd frontend/demos
 node server.mjs
 ```
 
-打开 `http://127.0.0.1:5173`。页面顶部应显示“Core 已连接”和“Agent 已连接”。
+打开 <http://127.0.0.1:5173>。地址可用 `CORE_BACKEND_URL`、`AGENT_BACKEND_URL`、`PORT` 覆盖。
 
-可覆盖默认地址：
+### 检查是否连通
 
-```powershell
-$env:CORE_BACKEND_URL = "http://127.0.0.1:8000"
-$env:AGENT_BACKEND_URL = "http://127.0.0.1:8100"
-$env:PORT = "5173"
-node server.mjs
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8100/openapi.json
+curl http://127.0.0.1:5174/api/agent/openapi.json
 ```
 
-兼容旧变量 `BACKEND_URL`，但新配置建议使用含义更明确的 `CORE_BACKEND_URL`。
+## 联调行为与安全边界
 
-## 接入行为
-
-- 账户、余额、流水、转账、预算、订阅、卡片、理财及审批/MFA 页面调用真实 Banking Core。
-- AI 助手调用 `POST /api/agent/tasks`，请求包含稳定的浏览器会话 UUID，但不包含用户身份或授权字段。
-- 助手会发送最近的对话历史；只有带 `[CLARIFICATION]` 标记的未完成澄清链会参与 Slot 合并，已完成任务不会污染新请求。
-- 当前 Agent 完成请求时，前端展示后端 `TaskPlan`、工具步骤和 Banking Core 结果。
-- 当前 Agent 返回 `NEEDS_CLARIFICATION` 时，前端展示结构化确认表单。账户与联系人由 Core 的只读工具提供选项，模型推断值标为“待确认”。
-- 点击“确认并继续”会发送严格的结构化 `confirmation`，不会把表单再次交给 LLM 解释；因此确认值不会反复被标记为模型推断并循环弹窗。
-- 首次向新收款人转账时，在“转账”页填写姓名和完整收款账号；Core 验证并保存后，后续聊天转账可以按姓名或昵称自动匹配。完整账号不会通过聊天 Prompt 发送给 LLM。
-- 转账页的“查看 10 个虚构演示收款账号”可展开测试账号清单；若数据库早于该功能创建，请重新运行 `uv run python -m scripts.seed_demo_data`。
-- 密码、验证码、CVV 和完整卡号在浏览器与 Agent 请求契约两层阻止，不会进入外部 LLM；MFA 仍只提交给 Core 的独立验证接口。
-- `WAITING_APPROVAL` 或 `FAILED` 不会自动重放，防止重复草稿或重复写入；用户转到对应业务页面完成显式确认/MFA。
-- Agent 不可用时，业务页面仍可使用 Core，但助手不会在浏览器本地执行银行操作。
-- Core 不可用时会进入内置演示模式。演示模式不写数据库，不能当作后端联调成功的证据。
-
-右上角“JSON 日志”显示最多 40 次请求/响应，并隐藏授权引用、六位 MFA 验证码及收款账号主体（只保留尾号）。
-
-## 当前支持范围
-
-| 页面/能力 | 后端来源 | 状态 |
-|---|---|---|
-| 账户、余额、流水及分类修正 | Banking Core | 已接入 |
-| 转账草稿、Yellow/Red 审批、提交及状态查询 | Banking Core | 已接入 |
-| 预算、消费分析、订阅与周期扣费线索 | Banking Core | 已接入 |
-| 卡片冻结/解冻/挂失/限额 | Banking Core | 已接入 |
-| 风险测评、产品比较、申购/赎回 | Banking Core | 已接入 |
-| Agent 持久任务、计划及结果 | Agent API + LangGraph | 已接入 |
-| Jev 路由 | 无 | 按要求暂不接入，保持可插拔 |
-| 储蓄罐 | Banking Core + Typed Tools | 虚拟分配模式；持久化目标和历史，但不移动账户资金 |
-| 语音 | 无 | 尚未接入 |
+- **身份只由服务端注入。** 用户身份来自 Core / Agent 的环境变量。浏览器请求不能提交或覆盖 `user_id`、风险等级、MFA、审批或授权引用。
+- **令牌不进入浏览器。** Node 代理会覆盖浏览器提供的 `Authorization`，分别注入 Core 和 Agent 的服务令牌。示例值只能用于本机开发，部署前必须替换。
+- **敏感信息不发给模型。** 密码、验证码、CVV 和完整卡号在浏览器和 Agent 请求契约两层被拦截，不会进入外部 LLM；MFA 只提交给 Core 的独立验证接口。
+- **风险等级以 Core 为准。** 当天累计转账（含本笔）不超过 ¥1,000 为黄色，超过为红色；在护盾页取消会撤销未完成的草稿。
+- **不自动重放。** `WAITING_APPROVAL` 或 `FAILED` 的任务不会自动重试，避免重复草稿或重复写入。
+- **Agent 不可用时**，业务页面仍可使用 Core，但助手不会在本地执行银行操作。
+- **Core 不可用时**，前端进入内置演示模式（虚构数据，验证码 `123456`）。演示模式不写数据库，不能当作联调成功的证据。
+- **请求日志。** Aegis 的「个人资料 → API 日志」显示带 Trace ID 的请求和响应，并隐藏授权引用和验证码。
 
 ## 验证
 
-前端代理和脚本语法测试：
+```bash
+# Aegis
+cd frontend/aegis-pwa && npm run typecheck && npm test
 
-```powershell
-node --test frontend/demo-final/server.test.mjs
-node --check frontend/demo-final/server.mjs
+# 早期原型的代理
+node --test frontend/demos/server.test.mjs
+
+# 后端（仓库根目录）
+python -m pytest
 ```
-
-后端相关验证：
-
-```powershell
-uv run pytest tests/test_agent_api.py tests/test_agent_routing_planning.py -q
-uv run ruff check agent banking_core tests
-```
-
-`server.test.mjs` 会启动隔离的 Core/Agent 假服务，验证：页面可读取、查询字符串/请求体原样转发、Core 与 Agent 不串线、代理覆盖并注入对应服务令牌、Agent OpenAPI 探测路径正确，以及未知前端路由返回 404。
 
 ## 常见问题
 
-- **页面显示 Core 演示模式**：确认 8000 端口和 `/health`，并检查 `DEVELOPMENT_USER_ID`。
-- **页面显示 Agent 未连接**：确认 8100 端口和 `AGENT_DEVELOPMENT_USER_ID`；它应与 Core 演示用户一致。
-- **Agent 能连通但工具调用失败**：检查 `BANKING_BASE_URL` 和 Core/Agent 的 `BANKING_SERVICE_TOKEN` 配置是否一致。
-- **Red 操作无法验证**：检查 `MOCK_MFA_CODE`，演示默认使用六位数字 `123456`。
-- **Durable task 接口失败**：确认 `AGENT_DATABASE_URL` 指向已迁移的 PostgreSQL；若设置了 `AGENT_CHECKPOINT_DATABASE_URL`，还要确认 LangGraph checkpoint 数据库可连接。
-- **所有输入都只返回安全追问**：`llm_only` 必须将 `MODEL_PROVIDER` 设置为 `deepseek`、`qwen` 或 `local` 并配置凭据；Provider 不可用时不会退回业务规则执行。
+- **页面一直显示演示模式**：确认 8000 和 8100 端口的服务都在运行，并检查 `DEVELOPMENT_USER_ID`。改完代码重新 `npm run build` 后，要重启 `npm run serve`。
+- **`failed to resolve host 'db'`**：`.env` 中的数据库主机还是 `db`，按上文改成 `127.0.0.1`。
+- **`UnicodeEncodeError: 'ascii' codec can't encode`**：`.env` 里的 API Key 含有 `•` 等非 ASCII 字符，通常是从网页或聊天里复制了被遮挡的 Key。请从服务商控制台重新复制完整 Key。
+- **所有输入都只返回追问或报错**：`AGENT_ROUTING_MODE=llm_only` 时，模型不可用就不会退回规则路由。检查 `MODEL_PROVIDER` 和 API Key，或改用 `hybrid`。
+- **小额转账也要验证码**：当天累计转账（含本笔）超过 ¥1,000 就是红色，这是预期行为。
+- **Red 操作无法验证**：检查 `.env` 中的 `MOCK_MFA_CODE`。
+- **Durable task 接口失败**：确认 `AGENT_DATABASE_URL` 指向已迁移的 PostgreSQL；如果设置了 `AGENT_CHECKPOINT_DATABASE_URL`，也要确认它可连接。
+- **安装依赖或导入时出现奇怪错误**：检查 `python --version` 是否为 3.12；过新的 Python（如 3.15）可能不兼容。
 - **端口已占用**：用 `PORT`、`CORE_BACKEND_URL`、`AGENT_BACKEND_URL` 覆盖默认值。
 
-不要对含有真实银行信息的数据库运行演示重置命令。当前项目只应使用虚构比赛数据。
-on my mac
-cd "/Users/zhexi/Desktop/2026秋/FinSAO-Financial_Secure_Agent_Operation_System"
-source .venv/bin/activate
-uvicorn banking_core.app.main:app --host 127.0.0.1 --port 8000
-cd "/Users/zhexi/Desktop/2026秋/FinSAO-Financial_Secure_Agent_Operation_System"
-source .venv/bin/activate
-uvicorn agent.app:app --host 127.0.0.1 --port 8100
-cd "/Users/zhexi/Desktop/2026秋/FinSAO-Financial_Secure_Agent_Operation_System/frontend/demo-final"
-node server.mjs
-然后访问：
-
-前端：http://127.0.0.1:5173
-Core 健康检查：http://127.0.0.1:8000/health
-Agent 文档：http://127.0.0.1:8100/docs
+不要对含有真实银行信息的数据库运行演示重置命令。本项目只应使用虚构的比赛数据。
