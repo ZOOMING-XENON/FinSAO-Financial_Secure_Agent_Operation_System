@@ -98,7 +98,9 @@ class FakeReviewer:
         self.score = score
         self.calls: list[str] = []
 
-    async def review_plan(self, text: str, plan: object) -> float:
+    async def review_plan(
+        self, text: str, plan: object, intent: object | None = None
+    ) -> float:
         self.calls.append(text)
         return self.score
 
@@ -114,6 +116,7 @@ async def test_plan_reviewer_veto_blocks_execution() -> None:
     from agent.context import SlotTracker
     from agent.contracts import AgentRequest, AgentResponseStatus, TrustedAgentContext
     from agent.planning import BaselinePlanner, PlanVerifier
+    from agent.routing import Intent, IntentResult, Route
     from agent.service import AgentService
     from agent_tools.contracts import ExecutionContext, ToolResult, ToolResultStatus
     from agent_tools.registry import ToolRegistry
@@ -137,12 +140,29 @@ async def test_plan_reviewer_veto_blocks_execution() -> None:
             self.calls.append(tool_name)
             return ToolResult(status=ToolResultStatus.SUCCESS, data=Output(value="ok"))
 
+    class LlmRouter:
+        def route(self, text: str, *, conversation: object = None) -> IntentResult:
+            del text, conversation
+            return IntentResult(
+                intent=Intent.TRANSFER,
+                complexity=3,
+                confidence=0.99,
+                route=Route.PLANNER,
+                reason="llm:test",
+                required_slots=[
+                    "source_account_id",
+                    "destination_account_id",
+                    "amount",
+                    "currency",
+                ],
+            )
+
     registry = ToolRegistry()
     register_default_tools(registry, Mock())
     gateway = Gateway()
     reviewer = FakeReviewer(0.0)
     service = AgentService(
-        router=RuleRouter(),
+        router=LlmRouter(),
         slots=SlotTracker(),
         planner=BaselinePlanner(),
         verifier=PlanVerifier(registry),
@@ -151,7 +171,13 @@ async def test_plan_reviewer_veto_blocks_execution() -> None:
         plan_reviewer=reviewer,
     )
     response = await service.handle(
-        AgentRequest(session_id=uuid4(), message="查看我的账户"),
+        AgentRequest(
+            session_id=uuid4(),
+            message=(
+                "transfer 5 CNY from 11111111-1111-4111-8111-111111111111 "
+                "to 22222222-2222-4222-8222-222222222222"
+            ),
+        ),
         TrustedAgentContext(
             authenticated_user_id=uuid4(),
             session_id=uuid4(),
@@ -162,3 +188,43 @@ async def test_plan_reviewer_veto_blocks_execution() -> None:
     assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
     assert gateway.calls == []
     assert reviewer.calls
+
+@pytest.mark.asyncio
+async def test_jev_selected_intent_reaches_llm_planner() -> None:
+    from uuid import uuid4
+
+    from agent.contracts import AgentRequest, TaskPlan
+    from agent.hybrid import BaselinePlanner, HybridPlanner
+    from agent.providers import FakeModelProvider
+    from agent.routing import IntentResult
+
+    candidate = TaskPlan(
+        goal="list accounts",
+        steps=[
+            {
+                "step_id": "list_accounts",
+                "purpose": "list",
+                "tool_call": {"tool_name": "get_accounts", "arguments": {}},
+                "argument_sources": {},
+            }
+        ],
+    )
+    provider = FakeModelProvider(candidate)
+    planner = HybridPlanner(BaselinePlanner(), provider)
+    intent = IntentResult(
+        intent=Intent.LIST_ACCOUNTS,
+        complexity=3,
+        confidence=0.95,
+        route=Route.PLANNER,
+        reason="jev:jev-test",
+    )
+    request = AgentRequest(session_id=uuid4(), message="show my accounts")
+    plan = await planner.create(
+        intent,
+        __import__("agent.context", fromlist=["SlotTracker"]).SlotTracker().extract(
+            request.message, intent
+        ),
+        request=request,
+        allowed_tools=[],
+    )
+    assert plan.goal == "list accounts"

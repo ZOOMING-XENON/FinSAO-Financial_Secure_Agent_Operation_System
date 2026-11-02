@@ -7,8 +7,11 @@ export type Direction = 'in' | 'out' | 'move';
 const INBOUND = new Set(['OPENING_BALANCE', 'INCOME', 'SALARY', 'REFUND', 'INTEREST']);
 const MOVES = new Set(['INTERNAL_TRANSFER', 'WEALTH', 'SAVINGS']);
 
-/** Banking Core does not expose debit/credit per row yet, so direction is inferred from category. */
+/** Prefer the Core-provided ledger direction; fall back for older responses. */
 export function direction(tx: Transaction): Direction {
+  if (tx.direction === 'DEBIT') return 'out';
+  if (tx.direction === 'CREDIT') return 'in';
+  if (tx.direction === 'MOVE') return 'move';
   const c = tx.category ?? '';
   if (INBOUND.has(c)) return 'in';
   if (MOVES.has(c)) return 'move';

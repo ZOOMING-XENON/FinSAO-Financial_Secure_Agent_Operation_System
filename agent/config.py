@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +19,11 @@ class AgentSettings(BaseSettings):
     jev_base_url: str = "https://api.typesafe.ai"
     jev_model: str = "jev-1.13.0"
     jev_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
+    jev_intent_min_confidence: float = Field(default=0.80, ge=0, le=1)
+    jev_expense_intent_min_confidence: float = Field(default=0.75, ge=0, le=1)
+    jev_max_injection: float = Field(default=0.03, ge=0, le=1)
+    jev_min_in_scope: float = Field(default=0.97, ge=0, le=1)
+    jev_plan_review_min: float = Field(default=0.70, ge=0, le=1)
     privacy_broker_enabled: bool = False
     resolution_enabled: bool = False
     request_deadline_seconds: float = Field(default=8.0, gt=0, le=60)
@@ -26,9 +31,22 @@ class AgentSettings(BaseSettings):
     expense_tracking_enabled: bool = False
     expense_labeling_jev_enabled: bool = False
     expense_chat_enabled: bool = False
+    expense_capture_enabled: bool = False
+    expense_capture_chat_enabled: bool = False
+    default_expense_currency: Literal["CNY", "USD", "EUR"] = "CNY"
     agent_routing_mode: Literal["hybrid", "llm_only"] = "hybrid"
     model_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     model_max_retries: int = Field(default=2, ge=0, le=5)
+    multimedia_enabled: bool = False
+    multimedia_vision_enabled: bool = True
+    multimedia_speech_enabled: bool = True
+    multimedia_max_upload_bytes: int = Field(default=10_000_000, ge=1_000, le=50_000_000)
+    multimedia_vision_base_url: str | None = None
+    multimedia_vision_api_key: SecretStr | None = None
+    multimedia_vision_model: str | None = None
+    multimedia_speech_base_url: str | None = None
+    multimedia_speech_api_key: SecretStr | None = None
+    multimedia_speech_model: str | None = None
 
     deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
@@ -48,10 +66,15 @@ class AgentSettings(BaseSettings):
     banking_service_token: SecretStr = SecretStr("development-only")
     banking_labeling_token: SecretStr = SecretStr("development-labeling-only")
     agent_database_url: str = Field(
-        default="postgresql+psycopg://banking:banking@localhost:5432/banking",
+        default="postgresql+psycopg://banking:banking@127.0.0.1:5432/banking",
         validation_alias=AliasChoices("AGENT_DATABASE_URL", "DATABASE_URL"),
     )
     agent_checkpoint_database_url: str | None = None
+
+    @field_validator("agent_development_user_id", mode="before")
+    @classmethod
+    def empty_uuid_as_none(cls, value: object) -> object:
+        return None if value == "" else value
 
 
 @lru_cache

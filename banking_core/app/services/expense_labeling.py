@@ -7,19 +7,15 @@ from uuid import UUID
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from banking_core.app.domain.enums import TransactionStatus
-from banking_core.app.persistence.models import (
-    AccountModel,
-    ExpenseLabelAttemptModel,
-    LedgerEntryModel,
-    TransactionModel,
-)
+from banking_core.app.domain.enums import TransactionKind, TransactionStatus
+from banking_core.app.persistence.models import ExpenseLabelAttemptModel, TransactionModel
 from banking_core.app.services.errors import ConflictError, ForbiddenError, NotFoundError
 from shared.expense_taxonomy import normalize_category
 
 PRECEDENCE = {"USER": 3, "RULE": 2, "JEV": 1}
 LABEL_POLICY_VERSION = "jev-label-v1"
 LEASE_DURATION = timedelta(minutes=5)
+MAX_ATTEMPTS = 5
 
 
 @dataclass(frozen=True)
@@ -47,8 +43,6 @@ class ExpenseLabelingService:
         transactions = list(
             self.session.scalars(
                 select(TransactionModel)
-                .join(LedgerEntryModel, LedgerEntryModel.transaction_id == TransactionModel.id)
-                .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
                 .outerjoin(
                     ExpenseLabelAttemptModel,
                     and_(
@@ -57,10 +51,20 @@ class ExpenseLabelingService:
                     ),
                 )
                 .where(
-                    AccountModel.user_id == user_id,
-                    LedgerEntryModel.credit > 0,
+                    TransactionModel.user_id == user_id,
+                    TransactionModel.kind == TransactionKind.EXPENSE,
                     TransactionModel.status == TransactionStatus.COMPLETED,
-                    TransactionModel.category_source.is_(None),
+                    TransactionModel.deleted_at.is_(None),
+                    or_(
+                        TransactionModel.category_source.is_(None),
+                        and_(
+                            TransactionModel.category_source == "RULE",
+                            or_(
+                                TransactionModel.category.is_(None),
+                                TransactionModel.category == "UNKNOWN",
+                            ),
+                        ),
+                    ),
                     or_(
                         ExpenseLabelAttemptModel.id.is_(None),
                         ExpenseLabelAttemptModel.status == "PENDING",
@@ -85,7 +89,16 @@ class ExpenseLabelingService:
                 .where(TransactionModel.id == candidate.id)
                 .with_for_update()
             )
-            if transaction is None or transaction.category_source is not None:
+            if transaction is None or transaction.deleted_at is not None:
+                continue
+            if transaction.category_source == "USER":
+                continue
+            if transaction.category_source == "RULE" and transaction.category not in {
+                None,
+                "UNKNOWN",
+            }:
+                continue
+            if transaction.category_source not in {None, "RULE"}:
                 continue
             attempt = self.session.scalar(
                 select(ExpenseLabelAttemptModel)
@@ -125,10 +138,12 @@ class ExpenseLabelingService:
         self, transaction_id: UUID, user_id: UUID, attempt: LabelAttempt
     ) -> ExpenseLabelAttemptModel:
         transaction = self.session.scalar(
-            select(TransactionModel)
-            .join(LedgerEntryModel, LedgerEntryModel.transaction_id == TransactionModel.id)
-            .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
-            .where(TransactionModel.id == transaction_id, AccountModel.user_id == user_id)
+            select(TransactionModel).where(
+                TransactionModel.id == transaction_id,
+                TransactionModel.user_id == user_id,
+                TransactionModel.kind == TransactionKind.EXPENSE,
+                TransactionModel.deleted_at.is_(None),
+            )
         )
         if transaction is None:
             raise NotFoundError("transaction not found")
@@ -152,9 +167,18 @@ class ExpenseLabelingService:
             )
             self.session.add(row)
         row.attempt_count += 1
-        row.status = "SUCCEEDED" if attempt.succeeded else "RETRY"
+        if attempt.succeeded:
+            row.status = "SUCCEEDED"
+        elif row.attempt_count >= MAX_ATTEMPTS:
+            row.status = "DEAD_LETTER"
+        else:
+            row.status = "RETRY"
         row.last_error = None if attempt.succeeded else (attempt.error or "label unavailable")[:120]
-        row.next_attempt_at = None if attempt.succeeded else datetime.now(UTC) + LEASE_DURATION
+        row.next_attempt_at = (
+            None
+            if attempt.succeeded or row.status == "DEAD_LETTER"
+            else datetime.now(UTC) + LEASE_DURATION
+        )
         row.lease_until = None
         self.session.commit()
         return row
@@ -166,9 +190,12 @@ class ExpenseLabelingService:
             raise ForbiddenError("derived labels must be JEV or RULE")
         transaction = self.session.scalar(
             select(TransactionModel)
-            .join(LedgerEntryModel, LedgerEntryModel.transaction_id == TransactionModel.id)
-            .join(AccountModel, AccountModel.id == LedgerEntryModel.account_id)
-            .where(TransactionModel.id == transaction_id, AccountModel.user_id == user_id)
+            .where(
+                TransactionModel.id == transaction_id,
+                TransactionModel.user_id == user_id,
+                TransactionModel.kind == TransactionKind.EXPENSE,
+                TransactionModel.deleted_at.is_(None),
+            )
             .with_for_update()
         )
         if transaction is None:

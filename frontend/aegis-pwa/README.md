@@ -14,7 +14,7 @@ The mobile front end for FinSAO, built as a **React + TypeScript PWA**. The same
 | **Aegis** (centre) | Agent chat with a living voice orb. Tapping it opens full-screen voice mode: the orb reacts to your voice, words appear live, and they're sent when you stop | Agent `/agent/tasks`, `/agent/tasks/{id}/resume` |
 | **Wealth** | Net worth (cash + pots + investments), rich pot cards, and the **investment tracker**: a 5-question risk profile, portfolio with allocation, products with buy/sell (Red tier, 6-digit code) | `/wealth/products`, `/holdings`, `/recommendations`, `/risk-assessment`, `/orders`, `/redemptions`, `/orders/{id}/commit` |
 | **Pot detail** | Colour hero with progress ring, milestones 25/50/75/100, on-track check with catch-up amount, quick add (+¥50/100/500), funded deposits through the shield, history, what-if calculator, emoji and colour picker. **Confetti** at milestones and a celebration screen at 100% | `/savings-pots/{id}`, `/contributions` (funded, `savings.contribute` tier) |
-| **Track spending** | Scan a receipt (recognition service, see below) and match it to a bank transaction, or correct any transaction's category | `PATCH /transactions/{id}/category`, `/api/recognition/receipts` |
+| **Track spending** | Scan a receipt (recognition service, see below) and match it to a bank transaction, or correct any transaction's category | `PATCH /transactions/{id}/category`, `/agent/receipts/parse`, `/expenses` |
 | **Send money** | People and recipients, a big-amount send screen, shield approval; the receipt appears **only after `COMPLETED`** | `/beneficiaries`, `/transfers/drafts`, `/transfers/{id}/commit` |
 | **Me** | Cards (freeze, report lost), the Green/Yellow/Red tiers, language (中文/EN), theme, connection status, and an API log with trace IDs | `/cards/{id}/freeze`, `/unfreeze`, `/report-lost` |
 
@@ -41,7 +41,7 @@ Current backend policy:
 - **Not in the backend yet, so shown honestly as preview**:
   - "Add money" shows a "planned" toast.
   - The pot calculator is labelled "illustration only".
-  - Voice uses the browser's own speech recognition.
+  - Voice uses browser speech recognition with an optional backend transcription fallback.
 - **Chat guards**: messages containing passwords, codes or card numbers are blocked before sending, and obvious prompt-injection attempts are refused.
 
 ## Look and feel
@@ -56,24 +56,43 @@ Demo mode (no backend) ships about three months of fictional activity relative t
 - **Contacts:** the People grid uses the family accounts seeded in Banking Core (爸爸, 妈妈 and so on). Tapping a contact saves them as a recipient through the backend's exact account-number match.
 - **Real photos:** put square images in `public/avatars/` and list them in `PHOTOS` in `src/core/people.ts`. Anyone without a photo keeps the illustration. Only use photos you have permission to use.
 
-## Receipt recognition contract (for the recognition service)
+## Receipt and voice recognition
 
-The app sends the photo to `POST /api/recognition/receipts`. `server.mjs` (and `npm run dev`) forward that to `RECOGNITION_BACKEND_URL` + `/receipts`, adding `Authorization: Bearer $RECOGNITION_TOKEN` if one is set. When `RECOGNITION_BACKEND_URL` isn't set, the route answers 501 and the app says recognition isn't connected. In demo mode the app shows a labelled example instead.
+Local receipt OCR is the default: Tesseract runs in a browser worker and the photo never leaves the device. If `VITE_MULTIMEDIA_BACKEND=true` and the Agent is live, the app first calls the optional backend and falls back to local OCR on any failure.
 
-Request: `multipart/form-data` with one file field named `receipt`.
+Receipt endpoint:
 
-Response (JSON):
-```json
-{ "merchant": "IKEA 宜家", "amount": "142.60", "currency": "CNY", "category": "HOUSEHOLD", "date": "2026-03-15", "confidence": 0.92 }
+```text
+POST /api/agent/receipts/parse
+multipart/form-data: upload=<image>
 ```
-- `amount` is a decimal string, same as Banking Core.
-- `category` is one of `HOUSEHOLD, GROCERIES, TRANSPORT, ENTERTAINMENT, DINING, UNKNOWN`.
 
-The app then lists bank transactions with the same amount, and saves the chosen category with `PATCH /transactions/{id}/category`.
+```json
+{
+  "items": [
+    {
+      "merchant": "Cafe",
+      "amount": "18.50",
+      "currency": "CNY",
+      "date": "2026-11-01",
+      "category": "DINING"
+    }
+  ]
+}
+```
+
+When Banking Core is live, confirmed receipt rows are saved through `POST /api/core/expenses` with an idempotency key. Demo mode keeps them in the device cash ledger. Voice uses browser speech recognition first; if it is unavailable and `VITE_MULTIMEDIA_BACKEND=true`, the app records audio and calls:
+
+```text
+POST /api/agent/audio/transcribe
+multipart/form-data: upload=<audio>
+```
+
+Both backend endpoints are disabled by default. Configure `MULTIMEDIA_ENABLED=true` plus the provider-specific `MULTIMEDIA_VISION_*` and `MULTIMEDIA_SPEECH_*` variables described in the repository `.env.example`. Failures return `503 MULTIMEDIA_UNAVAILABLE`; the app keeps its local fallback.
 
 ## Run it
 
-You need Node 18+ and the backend from the repo root (see the main `README.md`).
+You need Node 22.12+ and the backend from the repo root (see the main `README.md`).
 
 ```bash
 cd frontend/aegis-pwa

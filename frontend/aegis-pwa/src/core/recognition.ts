@@ -5,6 +5,7 @@ import type { Worker } from 'tesseract.js';
 import type { Category, Money } from './types';
 import { CATEGORIES } from './types';
 import { parseReceipts } from './receipt';
+import { api } from './api';
 
 export interface ReceiptGuess {
   merchant: string;
@@ -82,6 +83,24 @@ async function prepare(file: File): Promise<Blob | File> {
 export async function recognizeReceipt(file: File, progress?: (p: number) => void): Promise<ReceiptGuess[]> {
   onProgress = progress ?? null;
   try {
+    if (import.meta.env.VITE_MULTIMEDIA_BACKEND === 'true' && api.agent === 'live') {
+      try {
+        const remote = await api.parseReceipt(file);
+        if (!remote.items.length) throw new Error('no receipt rows');
+        return remote.items.map(item => ({
+          merchant: item.merchant,
+          amount: item.amount as Money | null,
+          currency: item.currency,
+          category: (CATEGORIES as readonly string[]).includes(item.category)
+            ? (item.category as Category)
+            : 'UNKNOWN',
+          date: item.date,
+          kind: 'out',
+        }));
+      } catch {
+        // Keep the existing on-device OCR path available when the optional backend is unavailable.
+      }
+    }
     const worker = await getWorker();
     const { data } = await worker.recognize(await prepare(file));
     if (import.meta.env.DEV) console.debug('[receipt OCR]', data.text);

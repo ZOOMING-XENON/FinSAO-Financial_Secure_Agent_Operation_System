@@ -11,7 +11,9 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from agent.expense_capture import parse_expense
 from agent.routing import Intent, IntentResult
+from shared.expense_taxonomy import EXPENSE_CATEGORIES
 
 
 class FactSource(StrEnum):
@@ -43,9 +45,26 @@ class SlotTracker:
 
     def from_confirmation(self, fields: dict[str, Any], intent: IntentResult) -> SlotState:
         """Bind already-confirmed form values without asking an LLM to reinterpret them."""
+        optional_fields = {
+            Intent.RECORD_EXPENSE: (
+                "category",
+                "occurred_at",
+                "account_id",
+                "origin",
+            ),
+            Intent.UPDATE_EXPENSE: (
+                "amount",
+                "currency",
+                "merchant",
+                "category",
+                "occurred_at",
+                "account_id",
+            ),
+        }.get(intent.intent, ())
+        fields_to_bind = (*intent.required_slots, *optional_fields)
         facts = {
             name: SlotFact(name, fields[name], FactSource.USER_EXPLICIT)
-            for name in intent.required_slots
+            for name in fields_to_bind
             if name in fields and fields[name] not in (None, "", [])
         }
         if intent.intent == Intent.TRANSFER and fields.get("include_balance") not in (
@@ -105,6 +124,59 @@ class SlotTracker:
             facts["account_id"] = SlotFact(
                 "account_id", str(UUID(ids[0])), FactSource.USER_EXPLICIT
             )
+        elif intent.intent == Intent.RECORD_EXPENSE:
+            capture = parse_expense(text, now=datetime.now(ZoneInfo("Asia/Shanghai")))
+            if capture.amount is not None:
+                facts["amount"] = SlotFact("amount", capture.amount, FactSource.USER_EXPLICIT)
+            if capture.currency is not None:
+                facts["currency"] = SlotFact(
+                    "currency", capture.currency, FactSource.USER_EXPLICIT
+                )
+            if capture.merchant is not None:
+                facts["merchant"] = SlotFact(
+                    "merchant", capture.merchant, FactSource.USER_EXPLICIT
+                )
+            if capture.category is not None:
+                facts["category"] = SlotFact(
+                    "category", capture.category, FactSource.USER_EXPLICIT
+                )
+            facts["occurred_at"] = SlotFact(
+                "occurred_at", capture.occurred_at.isoformat(), FactSource.USER_EXPLICIT
+            )
+            facts["origin"] = SlotFact("origin", capture.origin, FactSource.SYSTEM_CONSTANT)
+            if capture.ambiguous:
+                facts["expense_ambiguity"] = SlotFact(
+                    "expense_ambiguity", "true", FactSource.SYSTEM_CONSTANT
+                )
+            if ids:
+                facts["account_id"] = SlotFact(
+                    "account_id", str(UUID(ids[0])), FactSource.USER_EXPLICIT
+                )
+        elif intent.intent in {Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}:
+            if ids:
+                facts["expense_id"] = SlotFact(
+                    "expense_id", str(UUID(ids[0])), FactSource.USER_EXPLICIT
+                )
+            reference = re.search(
+                r"(?:delete|remove|change|update|edit|modify)\s+"
+                r"(?:the\s+|this\s+|that\s+)?(.+?)\s*"
+                r"(?:expense|transaction)",
+                text,
+                re.IGNORECASE,
+            )
+            if reference is not None:
+                facts["expense_ref"] = SlotFact(
+                    "expense_ref", reference.group(1).strip(), FactSource.USER_EXPLICIT
+                )
+            if intent.intent == Intent.UPDATE_EXPENSE:
+                if amount:
+                    facts["amount"] = SlotFact("amount", amount, FactSource.USER_EXPLICIT)
+                for category_name in EXPENSE_CATEGORIES:
+                    if re.search(rf"\b{category_name}\b", text, re.IGNORECASE):
+                        facts["category"] = SlotFact(
+                            "category", category_name, FactSource.USER_EXPLICIT
+                        )
+                        break
         elif intent.intent in {Intent.TRACK_EXPENSES, Intent.SUMMARIZE_EXPENSES}:
             lowered = text.lower()
             now = datetime.now(ZoneInfo("Asia/Shanghai"))

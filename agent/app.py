@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 from collections.abc import AsyncIterator
@@ -11,22 +12,29 @@ from typing import Annotated
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
 
+from agent.beneficiary_ranking import ModelBeneficiaryRanker
 from agent.capabilities import CapabilityBroker
 from agent.checkpoints import AsyncFromSyncPostgresSaver
 from agent.config import AgentSettings, get_agent_settings
 from agent.context import SlotTracker
-from agent.contracts import AgentRequest, AgentResponse, TrustedAgentContext
+from agent.contracts import (
+    AgentRequest,
+    AgentResponse,
+    AgentResponseStatus,
+    TrustedAgentContext,
+)
 from agent.durable import DurableEvent, DurableTask, DurableTaskManager, ResumeRequest
 from agent.expenses import ExpenseRouter
 from agent.factory import build_model_provider
 from agent.graph import build_runtime_agent_graph
 from agent.hybrid import HybridPlanner, HybridRouter
 from agent.jev_http import HttpJevAdapter
+from agent.multimedia import MultimediaProvider, MultimediaSettings, MultimediaUnavailable
 from agent.planning import BaselinePlanner, PlanVerifier
 from agent.privacy_broker import PrivacyBroker
 from agent.proactive import (
@@ -35,8 +43,10 @@ from agent.proactive import (
     ProactiveSubscription,
     ProactiveSuggestion,
 )
+from agent.review import PrivacyPreservingReviewer
 from agent.routing import RuleRouter
 from agent.service import AgentService
+from agent.transfer_reasoning import ModelTransferReasoner
 from agent_persistence import SqlAlchemyTaskStore
 from agent_tools.client import BankingHttpClient, StaticServiceAuthenticator
 from agent_tools.gateway import ToolGateway
@@ -51,6 +61,33 @@ _banking_client = BankingHttpClient(
 _registry = ToolRegistry()
 register_default_tools(_registry, _banking_client)
 _model_provider = build_model_provider(_settings)
+_multimedia_vision_api_key = (
+    _settings.multimedia_vision_api_key or _settings.deepseek_api_key
+)
+_multimedia = MultimediaProvider(
+    MultimediaSettings(
+        enabled=_settings.multimedia_enabled,
+        vision_base_url=_settings.multimedia_vision_base_url
+        or (_settings.deepseek_base_url if _settings.model_provider == "deepseek" else None),
+        vision_api_key=(
+            _multimedia_vision_api_key.get_secret_value()
+            if _multimedia_vision_api_key is not None
+            else None
+        ),
+        vision_model=_settings.multimedia_vision_model
+        or (_settings.deepseek_model if _settings.model_provider == "deepseek" else None),
+        speech_base_url=_settings.multimedia_speech_base_url,
+        speech_api_key=(
+            _settings.multimedia_speech_api_key.get_secret_value()
+            if _settings.multimedia_speech_api_key
+            else None
+        ),
+        speech_model=_settings.multimedia_speech_model,
+        max_upload_bytes=_settings.multimedia_max_upload_bytes,
+        vision_enabled=_settings.multimedia_vision_enabled,
+        speech_enabled=_settings.multimedia_speech_enabled,
+    )
+)
 _jev_adapter = (
     HttpJevAdapter(
         api_key=_settings.jev_api_key.get_secret_value(),
@@ -68,23 +105,41 @@ _service = AgentService(
         ExpenseRouter(
             RuleRouter(),
             enabled=_settings.expense_chat_enabled and _settings.expense_tracking_enabled,
+            capture_enabled=(
+                _settings.expense_capture_enabled
+                and _settings.expense_capture_chat_enabled
+            ),
         ),
         _model_provider,
         routing_mode=_settings.agent_routing_mode,
         jev_adapter=_jev_adapter,
         jev_enabled=_settings.jev_enabled,
+        jev_min_confidence=_settings.jev_intent_min_confidence,
+        jev_expense_min_confidence=_settings.jev_expense_intent_min_confidence,
+        jev_max_injection=_settings.jev_max_injection,
+        jev_min_in_scope=_settings.jev_min_in_scope,
         privacy_broker=_privacy_broker,
     ),
     slots=SlotTracker(),
-    planner=HybridPlanner(BaselinePlanner(), _model_provider),
+    planner=HybridPlanner(
+        BaselinePlanner(), _model_provider, privacy_broker=_privacy_broker
+    ),
     verifier=PlanVerifier(_registry),
     capabilities=CapabilityBroker(_registry),
     gateway=_gateway,
     plan_reviewer=(
-        _jev_adapter
+        PrivacyPreservingReviewer(_jev_adapter, _privacy_broker)
+        if _settings.jev_enabled
+        and _settings.jev_pass2_enabled
+        and _jev_adapter is not None
+        and _privacy_broker is not None
+        else _jev_adapter
         if _settings.jev_enabled and _settings.jev_pass2_enabled
         else None
     ),
+    plan_review_threshold=_settings.jev_plan_review_min,
+    beneficiary_ranker=ModelBeneficiaryRanker(_model_provider),
+    transfer_reasoner=ModelTransferReasoner(_model_provider),
 )
 _task_store = SqlAlchemyTaskStore(_settings.agent_database_url)
 _runtime_graph = build_runtime_agent_graph(_service, _gateway, MemorySaver())
@@ -112,9 +167,46 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             await _model_provider.close()
         if _jev_adapter is not None:
             await _jev_adapter.close()
+        await _multimedia.close()
 
 
 app = FastAPI(title="FinPilot Agent API", version="0.1.0", lifespan=lifespan)
+
+
+def _validate_upload(
+    upload: UploadFile,
+    content: bytes,
+    allowed: set[str],
+    kind: str,
+) -> None:
+    if upload.content_type not in allowed:
+        raise HTTPException(status_code=415, detail={"code": "UNSUPPORTED_MEDIA_TYPE"})
+    if not content:
+        raise HTTPException(status_code=400, detail={"code": "EMPTY_UPLOAD"})
+    if len(content) > _settings.multimedia_max_upload_bytes:
+        raise HTTPException(status_code=413, detail={"code": "UPLOAD_TOO_LARGE"})
+    if not _valid_signature(content, kind):
+        raise HTTPException(status_code=415, detail={"code": "INVALID_MEDIA"})
+
+
+def _valid_signature(content: bytes, kind: str) -> bool:
+    if kind == "image":
+        return (
+            content.startswith(b"\xff\xd8\xff")
+            or content.startswith(b"\x89PNG\r\n\x1a\n")
+            or (content.startswith(b"RIFF") and content[8:12] == b"WEBP")
+            or (content[4:8] == b"ftyp")
+        )
+    if kind == "audio":
+        return (
+            content.startswith(b"\x1aE\xdf\xa3")
+            or (content.startswith(b"RIFF") and content[8:12] == b"WAVE")
+            or content.startswith(b"ID3")
+            or content[:2] in {b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"}
+            or content[4:8] == b"ftyp"
+            or content.startswith(b"OggS")
+        )
+    return False
 
 
 def get_agent_service() -> AgentService:
@@ -152,6 +244,65 @@ def get_trusted_user_id(
     return settings.agent_development_user_id
 
 
+@app.post("/agent/receipts/parse")
+async def parse_receipt(
+    user_id: Annotated[UUID, Depends(get_trusted_user_id)],
+    upload: UploadFile = File(...),  # noqa: B008
+) -> dict[str, object]:
+    del user_id
+    content = await upload.read(_settings.multimedia_max_upload_bytes + 1)
+    _validate_upload(
+        upload,
+        content,
+        {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic"},
+        "image",
+    )
+    try:
+        result = await _multimedia.extract_receipt(content, upload.content_type or "image/jpeg")
+    except MultimediaUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "MULTIMEDIA_UNAVAILABLE", "message": str(exc)},
+        ) from None
+    return result.model_dump(mode="json")
+
+
+@app.post("/agent/audio/transcribe")
+async def transcribe_audio(
+    user_id: Annotated[UUID, Depends(get_trusted_user_id)],
+    upload: UploadFile = File(...),  # noqa: B008
+) -> dict[str, object]:
+    del user_id
+    content = await upload.read(_settings.multimedia_max_upload_bytes + 1)
+    _validate_upload(
+        upload,
+        content,
+        {
+            "audio/webm",
+            "audio/wav",
+            "audio/x-wav",
+            "audio/mpeg",
+            "audio/mp3",
+            "audio/mp4",
+            "audio/ogg",
+            "audio/x-m4a",
+        },
+        "audio",
+    )
+    try:
+        result = await _multimedia.transcribe(
+            content,
+            upload.filename or "voice.webm",
+            upload.content_type or "audio/webm",
+        )
+    except MultimediaUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "MULTIMEDIA_UNAVAILABLE", "message": str(exc)},
+        ) from None
+    return result.model_dump(mode="json")
+
+
 @app.post("/agent/requests", response_model=AgentResponse)
 async def create_agent_request(
     request: AgentRequest,
@@ -169,7 +320,19 @@ async def create_agent_request(
         task_id=uuid4(),
         trace_id=trace_id,
     )
-    return await service.handle(request, context)
+    try:
+        return await asyncio.wait_for(
+            service.handle(request, context),
+            timeout=_settings.request_deadline_seconds,
+        )
+    except TimeoutError:
+        return AgentResponse(
+            request_id=request.request_id,
+            session_id=request.session_id,
+            task_id=context.task_id,
+            status=AgentResponseStatus.NEEDS_CLARIFICATION,
+            message="Request deadline exceeded; no action was executed.",
+        )
 
 
 @app.post("/agent/tasks", response_model=DurableTask)
@@ -189,7 +352,16 @@ async def create_task(
         task_id=uuid4(),
         trace_id=trace_id,
     )
-    return await manager.create(request, context)
+    try:
+        return await asyncio.wait_for(
+            manager.create(request, context),
+            timeout=_settings.request_deadline_seconds,
+        )
+    except TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail={"code": "REQUEST_DEADLINE_EXCEEDED"},
+        ) from None
 
 
 @app.get("/agent/tasks/{task_id}", response_model=DurableTask)

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable
 from typing import Any, Protocol
 from uuid import uuid4
 
+from agent.beneficiary_ranking import ModelBeneficiaryRanker
 from agent.capabilities import CapabilityBroker
 from agent.context import FactSource, SlotFact, SlotState, SlotTracker
 from agent.contracts import (
@@ -22,17 +24,19 @@ from agent.contracts import (
     TaskPlan,
     TrustedAgentContext,
 )
-from agent.jev_http import JevUnavailable
+from agent.jev_http import JevAuthError, JevUnavailable
 from agent.localization import (
     BUDGET_CATEGORIES,
     FIELD_LABELS,
     contains_cjk,
     is_english,
+    localize_entity_name,
     localize_plan,
 )
 from agent.planning import PlanValidationError, PlanVerifier
 from agent.responses import SafeResponseGenerator
 from agent.routing import REQUIRED_SLOTS_BY_INTENT, Intent, IntentResult, Route
+from agent.transfer_reasoning import ModelTransferReasoner
 from agent_tools.contracts import ExecutionContext, ToolResult, ToolResultStatus
 
 logger = logging.getLogger(__name__)
@@ -51,7 +55,9 @@ class Router(Protocol):
 
 
 class PlanReviewer(Protocol):
-    async def review_plan(self, text: str, plan: TaskPlan) -> float: ...
+    async def review_plan(
+        self, text: str, plan: TaskPlan, intent: Intent | None = None
+    ) -> float: ...
 
 
 class Planner(Protocol):
@@ -79,6 +85,8 @@ class AgentService:
         responses: SafeResponseGenerator | None = None,
         plan_reviewer: PlanReviewer | None = None,
         plan_review_threshold: float = 0.5,
+        beneficiary_ranker: ModelBeneficiaryRanker | None = None,
+        transfer_reasoner: ModelTransferReasoner | None = None,
     ) -> None:
         self._router = router
         self._slots = slots
@@ -89,6 +97,8 @@ class AgentService:
         self._responses = responses or SafeResponseGenerator()
         self._plan_reviewer = plan_reviewer
         self._plan_review_threshold = plan_review_threshold
+        self._beneficiary_ranker = beneficiary_ranker
+        self._transfer_reasoner = transfer_reasoner
 
     async def handle(self, request: AgentRequest, context: TrustedAgentContext) -> AgentResponse:
         if request.confirmation is not None:
@@ -106,6 +116,44 @@ class AgentService:
             contextual_text, active_conversation = self._active_context(request)
             routed = self._router.route(request.message, conversation=active_conversation)
             intent = await routed if isinstance(routed, Awaitable) else routed
+            transfer_analysis = None
+            if (
+                intent.intent not in {Intent.GENERAL_CHAT, Intent.UNKNOWN}
+                and self._transfer_reasoner is not None
+            ):
+                transfer_analysis = await self._transfer_reasoner.analyze(
+                    message=request.message,
+                    conversation=request.conversation,
+                    request_id=request.request_id,
+                )
+                if transfer_analysis is not None and (
+                    transfer_analysis.multiple_actions
+                    or (
+                        intent.intent == Intent.TRANSFER
+                        and transfer_analysis.requires_clarification
+                    )
+                ):
+                    message = (
+                        "I found multiple financial actions. Please review them separately; "
+                        "no action was executed."
+                        if transfer_analysis.multiple_actions and is_english(request.locale)
+                        else "我识别到多项资金操作。请分别审核；目前没有执行任何操作。"
+                        if transfer_analysis.multiple_actions
+                        else "I need the bill total, number of people, and who paid before "
+                        "calculating the transfer. No action was executed."
+                        if is_english(request.locale)
+                        else (
+                            "请明确账单总额、分摊人数及谁先付款，再计算转账额；"
+                            "目前没有执行任何操作。"
+                        )
+                    )
+                    return AgentResponse(
+                        request_id=request.request_id,
+                        session_id=request.session_id,
+                        task_id=context.task_id,
+                        status=AgentResponseStatus.NEEDS_CLARIFICATION,
+                        message=message,
+                    )
             if intent.intent == Intent.CORRECT_EXPENSE_CATEGORY:
                 return AgentResponse(
                     request_id=request.request_id,
@@ -148,9 +196,33 @@ class AgentService:
                     ),
                 )
             slot_state = self._slots.extract(contextual_text, intent)
+            if (
+                intent.intent == Intent.TRANSFER
+                and transfer_analysis is not None
+                and transfer_analysis.amount is not None
+            ):
+                slot_state.facts["amount"] = SlotFact(
+                    "amount", transfer_analysis.amount, FactSource.MODEL_INFERRED
+                )
+                slot_state.missing = [name for name in slot_state.missing if name != "amount"]
+        if (
+            intent.intent in {Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}
+            and "expense_id" not in slot_state.facts
+        ):
+            await self._resolve_expense_reference(context, slot_state)
         inferred = any(fact.source.value == "MODEL_INFERRED" for fact in slot_state.facts.values())
         if slot_state.missing or inferred:
-            return await self._clarification_response(request, context, intent, slot_state)
+            return await self._clarification_response(
+                request,
+                context,
+                intent,
+                slot_state,
+                transfer_calculation=(
+                    transfer_analysis.calculation
+                    if request.confirmation is None and transfer_analysis is not None
+                    else None
+                ),
+            )
         try:
             actions = self._capabilities.allowed_actions(context=context, intent=intent.intent)
             planned = self._planner.create(
@@ -190,25 +262,69 @@ class AgentService:
                 message=validation_message,
                 error=AgentError(code=exc.code, message=str(exc)),
             )
-        if self._plan_reviewer is not None:
+        reviewer = self._plan_reviewer
+        should_review = (
+            reviewer is not None
+            and intent.reason.startswith(("llm:", "jev:"))
+            and intent.intent not in {
+                Intent.RECORD_EXPENSE,
+                Intent.UPDATE_EXPENSE,
+                Intent.DELETE_EXPENSE,
+            }
+            and any(
+                step.tool_call is not None
+                and step.tool_call.tool_name
+                in {
+                    "create_transfer_draft",
+                    "commit_transfer",
+                    "create_wealth_subscription_draft",
+                    "commit_wealth_subscription",
+                    "create_wealth_redemption_draft",
+                    "commit_wealth_redemption",
+                    "cancel_subscription",
+                    "update_card_limit",
+                    "freeze_card",
+                    "unfreeze_card",
+                    "report_card_lost",
+                    "contribute_savings_pot",
+                }
+                for step in plan.steps
+            )
+        )
+        if should_review and reviewer is not None:
             try:
-                review = await self._plan_reviewer.review_plan(request.message, plan)
+                review = await reviewer.review_plan(
+                    request.message, plan, intent.intent
+                )
             except (JevUnavailable, TimeoutError) as exc:
                 logger.warning("plan review unavailable: %s", type(exc).__name__)
+                auth_failed = isinstance(exc, JevAuthError)
                 return AgentResponse(
                     request_id=request.request_id,
                     session_id=request.session_id,
                     task_id=context.task_id,
                     status=AgentResponseStatus.NEEDS_CLARIFICATION,
                     message=(
-                        "Plan review is temporarily unavailable; no action was executed."
+                        "Plan review is not configured correctly; no action was executed."
+                        if auth_failed and is_english(request.locale)
+                        else "计划审查未正确配置，未执行任何操作。"
+                        if auth_failed
+                        else "Plan review is temporarily unavailable; no action was executed."
                         if is_english(request.locale)
-                        else "计划复核暂不可用，未执行任何操作。"
+                        else "计划审查暂时不可用，未执行任何操作。"
                     ),
                     plan=localize_plan(plan, request.locale),
                     error=AgentError(
-                        code="PLAN_REVIEW_UNAVAILABLE",
-                        message="plan review provider unavailable",
+                        code=(
+                            "JEV_AUTH_INVALID"
+                            if auth_failed
+                            else "PLAN_REVIEW_UNAVAILABLE"
+                        ),
+                        message=(
+                            "Jev authentication failed"
+                            if auth_failed
+                            else "plan review provider unavailable"
+                        ),
                     ),
                 )
             if review < self._plan_review_threshold:
@@ -280,6 +396,7 @@ class AgentService:
                     status=response_status,
                     plan=public_plan,
                     data=data,
+                    locale=request.locale,
                 )
             ),
             plan=public_plan,
@@ -320,16 +437,59 @@ class AgentService:
         user_text.append(request.message)
         return "\n".join(user_text), active
 
+    async def _resolve_expense_reference(
+        self, context: TrustedAgentContext, slots: SlotState
+    ) -> None:
+        reference = slots.facts.get("expense_ref")
+        if reference is None:
+            return
+        execution_context = ExecutionContext(
+            authenticated_user_id=context.authenticated_user_id,
+            session_id=context.session_id,
+            task_id=context.task_id,
+            trace_id=context.trace_id,
+        )
+        result = await self._gateway.execute(
+            tool_name="get_expenses",
+            arguments={
+                "merchant": str(reference.value),
+                "limit": 5,
+                "sort_by": "posted_at",
+                "sort_direction": "desc",
+            },
+            context=execution_context,
+        )
+        if result.status != ToolResultStatus.SUCCESS or result.data is None:
+            return
+        payload = result.data.model_dump(mode="json")
+        items = payload.get("items", [])
+        if not isinstance(items, list) or not items:
+            return
+        if len(items) > 1:
+            slots.facts["expense_candidates"] = SlotFact(
+                "expense_candidates", items, FactSource.TOOL_VERIFIED
+            )
+            return
+        expense_id = items[0].get("id") if isinstance(items[0], dict) else None
+        if not expense_id:
+            return
+        slots.facts["expense_id"] = SlotFact(
+            "expense_id", str(expense_id), FactSource.TOOL_VERIFIED
+        )
+        slots.missing = [name for name in slots.missing if name != "expense_id"]
+
     async def _clarification_response(
         self,
         request: AgentRequest,
         context: TrustedAgentContext,
         intent: IntentResult,
         slots: SlotState,
+        transfer_calculation: str | None = None,
     ) -> AgentResponse:
         labels = FIELD_LABELS[request.locale]
         input_types = {
             "category": "combobox",
+            "expense_id": "select",
             "month_date": "month",
             "limit_amount": "amount",
             "source_account_id": "select",
@@ -340,6 +500,21 @@ class AgentService:
             "target_amount": "amount",
         }
         options: dict[str, list[ClarificationOption]] = {}
+        beneficiary_suggestion: tuple[str, str] | None = None
+        candidates = slots.facts.get("expense_candidates")
+        if candidates is not None and isinstance(candidates.value, list):
+            options["expense_id"] = [
+                ClarificationOption(
+                    value=str(item.get("id")),
+                    label=(
+                        f'{item.get("merchant") or item.get("description") or "expense"} '
+                        f'{item.get("amount", "")} {item.get("currency", "")} '
+                        f'({item.get("posted_at", "")})'
+                    ),
+                )
+                for item in candidates.value
+                if isinstance(item, dict) and item.get("id")
+            ]
         if intent.intent == Intent.CREATE_BUDGET:
             options["category"] = [
                 ClarificationOption(
@@ -364,14 +539,48 @@ class AgentService:
             )
             if accounts.status == ToolResultStatus.SUCCESS and accounts.data is not None:
                 payload = accounts.data.model_dump(mode="json")
+                active_accounts = [
+                    item for item in payload.get("accounts", []) if item.get("status") == "ACTIVE"
+                ]
                 options["source_account_id"] = [
                     ClarificationOption(
                         value=str(item["id"]),
-                        label=f'{item["name"]} · {item["account_number"]}',
+                        label=(
+                            f'{localize_entity_name(item["name"], request.locale)}'
+                            f' · {item["account_number"]}'
+                        ),
                     )
-                    for item in payload.get("accounts", [])
-                    if item.get("status") == "ACTIVE"
+                    for item in active_accounts
                 ]
+                if "source_account_id" not in slots.facts:
+                    requested_name = (
+                        "Savings"
+                        if re.search(
+                            r"\b(?:savings?|saving account)\b|储蓄",
+                            request.message,
+                            re.IGNORECASE,
+                        )
+                        else "Checking"
+                    )
+                    currency = slots.facts.get("currency")
+                    matches = [
+                        item
+                        for item in active_accounts
+                        if str(item.get("name") or "").casefold() == requested_name.casefold()
+                        and (
+                            currency is None
+                            or str(item.get("currency") or "") == str(currency.value)
+                        )
+                    ]
+                    if len(matches) == 1:
+                        slots.facts["source_account_id"] = SlotFact(
+                            "source_account_id",
+                            str(matches[0]["id"]),
+                            FactSource.TOOL_VERIFIED,
+                        )
+                        slots.missing = [
+                            name for name in slots.missing if name != "source_account_id"
+                        ]
             beneficiaries = await self._gateway.execute(
                 tool_name="list_beneficiaries",
                 arguments={},
@@ -384,9 +593,9 @@ class AgentService:
                     ClarificationOption(
                         value=str(item["destination_account_id"]),
                         label=(
-                            f'{item["name"]}'
+                            f'{localize_entity_name(item["name"], request.locale)}'
                             + (
-                                f' ({item["nickname"]})'
+                                f' ({localize_entity_name(item["nickname"], request.locale)})'
                                 if is_english(request.locale) and item.get("nickname")
                                 else f'（{item["nickname"]}）'
                                 if item.get("nickname")
@@ -419,8 +628,50 @@ class AgentService:
                         slots.missing = [
                             name for name in slots.missing if name != "destination_account_id"
                         ]
-        field_names = list(dict.fromkeys([*intent.required_slots, *slots.facts.keys()]))
-        field_names = [name for name in field_names if name != "beneficiary_query"]
+                if (
+                    "destination_account_id" not in slots.facts
+                    and self._beneficiary_ranker is not None
+                    and items
+                ):
+                    recommendation = await self._beneficiary_ranker.rank(
+                        message=request.message,
+                        conversation=request.conversation,
+                        candidates=items,
+                        locale=request.locale,
+                        request_id=request.request_id,
+                    )
+                    if recommendation is not None:
+                        selected = recommendation.candidate
+                        slots.facts["destination_account_id"] = SlotFact(
+                            "destination_account_id",
+                            str(selected["destination_account_id"]),
+                            FactSource.MODEL_INFERRED,
+                        )
+                        slots.missing = [
+                            name for name in slots.missing if name != "destination_account_id"
+                        ]
+                        display_name = localize_entity_name(
+                            selected.get("name"), request.locale
+                        )
+                        reason = recommendation.reason
+                        if is_english(request.locale) and contains_cjk(reason):
+                            reason = "It best matches the recent conversation."
+                        beneficiary_suggestion = (display_name, reason)
+        if intent.intent == Intent.RECORD_EXPENSE:
+            field_names = ["amount", "currency", "merchant"]
+            if "category" in slots.facts:
+                field_names.append("category")
+        elif intent.intent in {Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}:
+            field_names = ["expense_id", *(
+                name
+                for name in ("amount", "currency", "merchant", "category")
+                if name in slots.facts
+            )]
+        else:
+            field_names = list(
+                dict.fromkeys([*intent.required_slots, *slots.facts.keys()])
+            )
+            field_names = [name for name in field_names if name != "beneficiary_query"]
         fields = [
             ClarificationField(
                 name=name,
@@ -437,13 +688,56 @@ class AgentService:
         ]
         inferred_labels = [field.label for field in fields if field.inferred]
         missing_labels = [labels.get(name, name.replace("_", " ")) for name in slots.missing]
-        if intent.intent == Intent.TRANSFER:
-            message = "请选择付款账户，并输入或选择以前保存的收款人；系统不会要求你复制内部 UUID。"
+        if (
+            intent.intent == Intent.RECORD_EXPENSE
+            and "expense_ambiguity" in slots.facts
+        ):
+            message = (
+                "I found more than one possible expense. Please record them one at a "
+                "time, or provide one merchant for this entry."
+                if is_english(request.locale)
+                else "??????????????????????????????"
+            )
+        elif intent.intent == Intent.TRANSFER:
+            if beneficiary_suggestion is not None:
+                name, reason = beneficiary_suggestion
+                message = (
+                    f"AI suggested {name}: {reason} Review every field before confirming."
+                    if is_english(request.locale)
+                    else f"AI 建议收款人为 {name}：{reason} 请在确认前检查所有字段。"
+                )
+            else:
+                message = (
+                    "Review the source account and choose a saved beneficiary. The form never "
+                    "asks you to copy an internal UUID."
+                    if is_english(request.locale)
+                    else "请检查付款账户，并选择以前保存的收款人；系统不会要求你复制内部 UUID。"
+                )
+            if transfer_calculation is not None:
+                message = (
+                    f"Calculated share: {transfer_calculation}. {message}"
+                    if is_english(request.locale)
+                    else f"平摊金额：{transfer_calculation}。{message}"
+                )
         elif inferred_labels:
-            suffix = f"，并补充：{'、'.join(missing_labels)}" if missing_labels else ""
-            message = f"我根据上下文推断了{'、'.join(inferred_labels)}{suffix}。请检查表单后确认。"
+            suffix = (
+                f" and add: {', '.join(missing_labels)}" if missing_labels else ""
+            )
+            zh_suffix = (
+                f"，并补充：{'、'.join(missing_labels)}" if missing_labels else ""
+            )
+            message = (
+                f"I inferred {', '.join(inferred_labels)}{suffix}. Please review and confirm."
+                if is_english(request.locale)
+                else f"我根据上下文推断了{'、'.join(inferred_labels)}{zh_suffix}。"
+                "请检查表单后确认。"
+            )
         else:
-            message = f"为了继续，请补充：{'、'.join(missing_labels)}。"
+            message = (
+                f"To continue, provide: {', '.join(missing_labels)}."
+                if is_english(request.locale)
+                else f"为了继续，请补充：{'、'.join(missing_labels)}。"
+            )
         clarification = ClarificationPayload(
             kind="CONFIRM_INFERRED" if inferred_labels else "MISSING_FIELDS",
             intent=intent.intent.value,

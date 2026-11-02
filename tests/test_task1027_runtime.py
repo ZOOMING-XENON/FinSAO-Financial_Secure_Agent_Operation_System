@@ -11,6 +11,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
+from agent.beneficiary_ranking import ModelBeneficiaryRanker
 from agent.capabilities import CapabilityBroker
 from agent.context import SlotTracker
 from agent.contracts import (
@@ -27,6 +28,7 @@ from agent.planning import BaselinePlanner, PlanVerifier
 from agent.providers import FakeModelProvider
 from agent.routing import Intent, IntentResult, Route, RuleRouter
 from agent.service import AgentService
+from agent.transfer_reasoning import ModelTransferReasoner
 from agent_tools.contracts import ExecutionContext, ToolResult, ToolResultStatus
 from agent_tools.registry import ToolRegistry
 from agent_tools.tools import register_default_tools
@@ -39,6 +41,124 @@ class FixtureOutput(BaseModel):
 
 class StatusOutput(BaseModel):
     status: str
+
+
+@pytest.mark.asyncio
+async def test_transfer_reasoning_verifies_equal_split_and_rejects_partial_bundle() -> None:
+    message = "我需要给小李转钱，昨晚吃海底捞418元我要和他aa"
+    reasoner = ModelTransferReasoner(
+        FakeModelProvider(
+            {
+                "multiple_actions": False,
+                "requires_clarification": False,
+                "total": "418",
+                "share_count": 2,
+                "recipient_paid": True,
+                "explanation": "418 ÷ 2 = 209，小李先付款",
+            }
+        )
+    )
+    result = await reasoner.analyze(message=message, conversation=[], request_id=uuid4())
+    assert result is not None
+    assert result.amount == "209.00"
+    assert result.requires_clarification is False
+
+    bundle = ModelTransferReasoner(
+        FakeModelProvider(
+            {
+                "multiple_actions": True,
+                "requires_clarification": False,
+                "total": "418",
+                "share_count": 2,
+                "recipient_paid": True,
+                "explanation": "还有独立的储蓄任务",
+            }
+        )
+    )
+    bundle_result = await bundle.analyze(
+        message="下周活动预留500元，同时" + message,
+        conversation=[],
+        request_id=uuid4(),
+    )
+    assert bundle_result is not None and bundle_result.multiple_actions
+
+    wrong_operand = await reasoner.analyze(
+        message="给小李转钱，昨晚吃饭500元我要和他aa",
+        conversation=[],
+        request_id=uuid4(),
+    )
+    assert wrong_operand is not None and wrong_operand.requires_clarification
+
+
+@pytest.mark.asyncio
+async def test_equal_split_prefills_verified_amount_for_review() -> None:
+    registry = ToolRegistry()
+    register_default_tools(registry, Mock())
+    gateway = ClarificationGateway()
+    service = AgentService(
+        router=RuleRouter(),
+        slots=SlotTracker(),
+        planner=BaselinePlanner(),
+        verifier=PlanVerifier(registry),
+        capabilities=CapabilityBroker(registry),
+        gateway=gateway,
+        transfer_reasoner=ModelTransferReasoner(
+            FakeModelProvider(
+                {
+                    "multiple_actions": False,
+                    "requires_clarification": False,
+                    "total": "418",
+                    "share_count": 2,
+                    "recipient_paid": True,
+                    "explanation": "418 ÷ 2 = 209",
+                }
+            )
+        ),
+    )
+    session_id = uuid4()
+    response = await service.handle(
+        AgentRequest(
+            session_id=session_id,
+            message="给小李转账，昨晚吃海底捞418元我要和他aa",
+        ),
+        _trusted_context(session_id),
+    )
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert isinstance(response.result, dict)
+    clarification = response.result["clarification"]
+    fields = {item["name"]: item for item in clarification["fields"]}
+    assert fields["amount"]["value"] == "209.00"
+    assert fields["amount"]["inferred"] is True
+    assert "418 ÷ 2 = 209.00" in response.message
+    assert gateway.calls == ["get_accounts", "list_beneficiaries"]
+
+
+@pytest.mark.asyncio
+async def test_transfer_bundle_does_not_open_partial_transfer_form() -> None:
+    service, gateway = build_service()
+    service._transfer_reasoner = ModelTransferReasoner(  # noqa: SLF001
+        FakeModelProvider(
+            {
+                "multiple_actions": True,
+                "requires_clarification": False,
+                "total": "418",
+                "share_count": 2,
+                "recipient_paid": True,
+                "explanation": "另有储蓄任务",
+            }
+        )
+    )
+    session_id = uuid4()
+    response = await service.handle(
+        AgentRequest(
+            session_id=session_id,
+            message="下周活动预留500元，同时给小李转钱，昨晚吃饭418元我要和他aa",
+        ),
+        _trusted_context(session_id),
+    )
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert response.result is None
+    assert gateway.calls == []
 
 
 class CapturingGateway:
@@ -60,6 +180,14 @@ class FailIfRouted:
     def route(self, text: str, *, conversation: list[Any] | None = None) -> IntentResult:
         del text, conversation
         raise AssertionError("a confirmed form must not be sent through the router or LLM")
+
+
+class FailIfReviewed:
+    async def review_plan(
+        self, text: str, plan: TaskPlan, intent: Intent | None = None
+    ) -> float:
+        del text, plan, intent
+        raise AssertionError("a confirmed form must not be sent through model plan review")
 
 
 class ReconciliationGateway:
@@ -105,8 +233,9 @@ class ClarificationGateway:
                     accounts=[
                         {
                             "id": str(uuid4()),
-                            "name": "日常账户",
+                            "name": "Checking",
                             "account_number": "DEMO-001",
+                            "currency": "CNY",
                             "status": "ACTIVE",
                         }
                     ]
@@ -315,12 +444,163 @@ async def test_transfer_clarification_returns_account_and_contact_choices() -> N
     assert isinstance(clarification, dict)
     fields = {item["name"]: item for item in clarification["fields"]}
     assert fields["source_account_id"]["options"]
+    assert fields["source_account_id"]["value"] is not None
     assert (
         fields["destination_account_id"]["options"][0]["label"]
         == "Friend（Friend） · 尾号 0001"
     )
     assert fields["destination_account_id"]["value"] is not None
     assert gateway.calls == ["get_accounts", "list_beneficiaries"]
+
+
+@pytest.mark.asyncio
+async def test_transfer_uses_recent_context_to_recommend_beneficiary_and_checking() -> None:
+    class ContextGateway:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.checking_id = uuid4()
+            self.savings_id = uuid4()
+            self.dad_id = uuid4()
+            self.mom_id = uuid4()
+
+        async def execute(
+            self, *, tool_name: str, arguments: dict[str, Any], context: ExecutionContext
+        ) -> ToolResult[Any]:
+            del arguments, context
+            self.calls.append(tool_name)
+            if tool_name == "get_accounts":
+                class Accounts(BaseModel):
+                    accounts: list[dict[str, Any]]
+
+                return ToolResult(
+                    status=ToolResultStatus.SUCCESS,
+                    data=Accounts(
+                        accounts=[
+                            {
+                                "id": str(self.checking_id),
+                                "name": "Checking",
+                                "account_number": "DEMO-001",
+                                "currency": "CNY",
+                                "status": "ACTIVE",
+                            },
+                            {
+                                "id": str(self.savings_id),
+                                "name": "Savings",
+                                "account_number": "DEMO-002",
+                                "currency": "CNY",
+                                "status": "ACTIVE",
+                            },
+                        ]
+                    ),
+                )
+            if tool_name == "list_beneficiaries":
+                class Beneficiaries(BaseModel):
+                    beneficiaries: list[dict[str, Any]]
+
+                return ToolResult(
+                    status=ToolResultStatus.SUCCESS,
+                    data=Beneficiaries(
+                        beneficiaries=[
+                            {
+                                "destination_account_id": str(self.dad_id),
+                                "destination_account_number": "299000000001",
+                                "name": "爸爸",
+                                "nickname": "爸爸",
+                            },
+                            {
+                                "destination_account_id": str(self.mom_id),
+                                "destination_account_number": "390000000002",
+                                "name": "妈妈",
+                                "nickname": "妈妈",
+                            },
+                        ]
+                    ),
+                )
+            raise AssertionError(tool_name)
+
+    registry = ToolRegistry()
+    register_default_tools(registry, Mock())
+    gateway = ContextGateway()
+    service = AgentService(
+        router=RuleRouter(),
+        slots=SlotTracker(),
+        planner=BaselinePlanner(),
+        verifier=PlanVerifier(registry),
+        capabilities=CapabilityBroker(registry),
+        gateway=gateway,
+        beneficiary_ranker=ModelBeneficiaryRanker(
+            FakeModelProvider(
+                {
+                    "candidate_key": "candidate_1",
+                    "confidence": 0.91,
+                    "reason": "The previous message says the user's mom has a birthday tomorrow.",
+                }
+            )
+        ),
+    )
+    session_id = uuid4()
+    response = await service.handle(
+        AgentRequest(
+            session_id=session_id,
+            message="给她转账100元",
+            locale="en-US",
+            conversation=[
+                ConversationMessage(
+                    role=ConversationRole.USER,
+                    content="我妈妈明天过生日。",
+                ),
+                ConversationMessage(
+                    role=ConversationRole.ASSISTANT,
+                    content="That sounds thoughtful. How can I help?",
+                ),
+            ],
+        ),
+        _trusted_context(session_id),
+    )
+
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert isinstance(response.result, dict)
+    clarification = response.result["clarification"]
+    assert isinstance(clarification, dict)
+    fields = {item["name"]: item for item in clarification["fields"]}
+    assert fields["source_account_id"]["value"] == str(gateway.checking_id)
+    assert fields["destination_account_id"]["value"] == str(gateway.mom_id)
+    assert fields["destination_account_id"]["inferred"] is True
+    assert "Mom" in fields["destination_account_id"]["options"][1]["label"]
+    assert all(
+        not any("\u3400" <= char <= "\u9fff" for char in option["label"])
+        for option in fields["destination_account_id"]["options"]
+    )
+    assert "AI suggested Mom" in response.message
+    assert not any("\u3400" <= char <= "\u9fff" for char in response.message)
+
+    explicit_savings = await service.handle(
+        AgentRequest(
+            session_id=uuid4(),
+            message="Transfer 100 CNY from Savings to her",
+            locale="en-US",
+            conversation=[
+                ConversationMessage(
+                    role=ConversationRole.USER,
+                    content="My mom has a birthday tomorrow.",
+                )
+            ],
+        ),
+        _trusted_context(uuid4()),
+    )
+    assert isinstance(explicit_savings.result, dict)
+    savings_clarification = explicit_savings.result["clarification"]
+    assert isinstance(savings_clarification, dict)
+    savings_fields = {
+        item["name"]: item for item in savings_clarification["fields"]
+    }
+    assert savings_fields["source_account_id"]["value"] == str(gateway.savings_id)
+    assert gateway.calls == [
+        "get_accounts",
+        "list_beneficiaries",
+        "get_accounts",
+        "list_beneficiaries",
+    ]
 
 
 @pytest.mark.asyncio
@@ -331,10 +611,16 @@ async def test_confirmed_transfer_form_bypasses_llm_and_executes_once() -> None:
     service = AgentService(
         router=FailIfRouted(),
         slots=SlotTracker(),
-        planner=BaselinePlanner(),
+        planner=HybridPlanner(
+            BaselinePlanner(),
+            FakeModelProvider(
+                {"goal": "must not run", "steps": [{"step_id": "model_step"}]}
+            ),
+        ),
         verifier=PlanVerifier(registry),
         capabilities=CapabilityBroker(registry),
         gateway=gateway,
+        plan_reviewer=FailIfReviewed(),
     )
     source, destination, session_id = uuid4(), uuid4(), uuid4()
     response = await service.handle(

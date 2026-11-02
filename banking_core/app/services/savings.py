@@ -7,7 +7,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from banking_core.app.domain.enums import AccountStatus, Currency, TransactionStatus
+from banking_core.app.domain.enums import (
+    AccountStatus,
+    Currency,
+    TransactionKind,
+    TransactionOrigin,
+    TransactionStatus,
+)
 from banking_core.app.domain.money import quantize_money
 from banking_core.app.persistence.models import (
     AccountModel,
@@ -227,8 +233,12 @@ class SavingsPotService:
             contribution_id = uuid4()
             transaction = TransactionModel(
                 id=uuid4(),
+                user_id=user_id,
+                account_id=source.id,
                 reference=f"SAV-{contribution_id}",
                 status=TransactionStatus.COMPLETED,
+                kind=TransactionKind.TRANSFER,
+                origin=TransactionOrigin.BANK,
                 amount=amount,
                 currency=pot.currency,
                 description=f"Savings contribution: {pot.name}",

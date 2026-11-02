@@ -72,6 +72,7 @@ class HybridRouter:
         jev_adapter: JevAdapter | None = None,
         jev_enabled: bool = False,
         jev_min_confidence: float = 0.8,
+        jev_expense_min_confidence: float = 0.75,
         jev_max_injection: float = 0.03,
         jev_min_in_scope: float = 0.97,
         privacy_broker: PrivacyBroker | None = None,
@@ -84,6 +85,7 @@ class HybridRouter:
         self._jev_adapter = jev_adapter
         self._jev_enabled = jev_enabled
         self._jev_min_confidence = jev_min_confidence
+        self._jev_expense_min_confidence = jev_expense_min_confidence
         self._jev_max_injection = jev_max_injection
         self._jev_min_in_scope = jev_min_in_scope
         self._privacy_broker = privacy_broker
@@ -124,11 +126,23 @@ class HybridRouter:
                 observation = await self._jev_adapter.classify(model_text)
             except JevUnavailable:
                 observation = None
+            expense_intents = {
+                Intent.RECORD_EXPENSE,
+                Intent.UPDATE_EXPENSE,
+                Intent.DELETE_EXPENSE,
+                Intent.TRACK_EXPENSES,
+                Intent.SUMMARIZE_EXPENSES,
+            }
+            min_confidence = (
+                self._jev_expense_min_confidence
+                if observation is not None and observation.intent in expense_intents
+                else self._jev_min_confidence
+            )
             if (
                 observation is not None
                 and observation.injection_probability <= self._jev_max_injection
                 and observation.in_scope_probability >= self._jev_min_in_scope
-                and observation.confidence >= self._jev_min_confidence
+                and observation.confidence >= min_confidence
                 and observation.order_consistent
                 and observation.intent not in CHAT_UNAVAILABLE_INTENTS
                 and observation.intent not in {Intent.UNKNOWN, Intent.GENERAL_CHAT}
@@ -229,9 +243,16 @@ class HybridRouter:
 class HybridPlanner:
     """Generate a candidate DAG with the LLM, then leave execution to PlanVerifier."""
 
-    def __init__(self, baseline: BaselinePlanner, provider: ModelProvider | None) -> None:
+    def __init__(
+        self,
+        baseline: BaselinePlanner,
+        provider: ModelProvider | None,
+        *,
+        privacy_broker: PrivacyBroker | None = None,
+    ) -> None:
         self._baseline = baseline
         self._provider = provider
+        self._privacy_broker = privacy_broker
 
     async def create(
         self,
@@ -242,7 +263,13 @@ class HybridPlanner:
         request: AgentRequest | None = None,
         allowed_tools: list[dict[str, object]] | None = None,
     ) -> TaskPlan:
-        if not intent.reason.startswith("llm:") or self._provider is None or request is None:
+        if (
+            intent.intent
+            in {Intent.RECORD_EXPENSE, Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}
+            or not intent.reason.startswith(("llm:", "jev:"))
+            or self._provider is None
+            or request is None
+        ):
             return self._baseline.create(
                 intent,
                 slots,
@@ -267,7 +294,14 @@ class HybridPlanner:
                     f"{tool_json}\n可信槽位：{fact_json}"
                 ),
             ),
-            ConversationMessage(role=ConversationRole.USER, content=request.message),
+            ConversationMessage(
+                role=ConversationRole.USER,
+                content=(
+                    self._privacy_broker.tokenize(request.message).text
+                    if self._privacy_broker is not None
+                    else request.message
+                ),
+            ),
         ]
         try:
             generated = await self._provider.generate_structured(

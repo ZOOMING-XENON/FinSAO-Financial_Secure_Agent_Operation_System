@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi.testclient import TestClient
 from langgraph.types import Command
 from pydantic import BaseModel
 from sqlalchemy import create_engine, func, select
@@ -27,7 +28,15 @@ from agent.proactive import ProactiveEventEngine
 from agent.service import AgentService
 from agent_persistence import SqlAlchemyTaskStore
 from agent_tools.contracts import ExecutionContext, ToolResult, ToolResultStatus
-from banking_core.app.domain.enums import Currency, TransferStatus
+from banking_core.app.api.dependencies import get_current_user_id, get_db_session
+from banking_core.app.domain.enums import (
+    Currency,
+    TransactionDirection,
+    TransactionKind,
+    TransactionOrigin,
+    TransferStatus,
+)
+from banking_core.app.main import app
 from banking_core.app.persistence.models import (
     AccountModel,
     AuditEventModel,
@@ -58,7 +67,13 @@ from banking_core.app.services.errors import (
     ForbiddenError,
     InsufficientFundsError,
 )
+from banking_core.app.services.expense_records import ExpenseRecordService
+from banking_core.app.services.expenses import ExpenseFilters, ExpenseService
 from banking_core.app.services.ledger import LedgerService
+from banking_core.app.services.transaction_history import (
+    AccountTransactionFilters,
+    TransactionHistoryService,
+)
 from banking_core.app.services.transfers import TransferService
 from scripts.seed_demo_data import seed
 
@@ -634,3 +649,140 @@ def test_analytics_cards_and_wealth_integration(migrated_database: str) -> None:
         assert redeemed.status == "COMPLETED"
         assert holding.amount == Decimal("600.00")
         assert account.balance == balance_after_subscription + Decimal("400.00")
+
+
+def test_transfer_history_and_manual_expense_activity(migrated_database: str) -> None:
+    engine = create_engine(migrated_database)
+    with Session(engine) as session, session.begin():
+        seed(session)
+    with Session(engine) as session:
+        owner = session.scalar(
+            select(UserModel).where(UserModel.email == "lin.xiaoyu@example.invalid")
+        )
+        assert owner is not None
+        source = session.scalar(
+            select(AccountModel).where(
+                AccountModel.user_id == owner.id,
+                AccountModel.name == "Checking",
+            )
+        )
+        destination = session.scalar(
+            select(AccountModel).where(
+                AccountModel.user_id != owner.id,
+                AccountModel.name == "Checking",
+                AccountModel.is_system.is_(False),
+            )
+        )
+        assert source is not None and destination is not None
+        draft = TransferService(
+            session, DenyAllTransferAuthorizationVerifier()
+        ).create_transfer_draft(
+            user_id=owner.id,
+            source_account_id=source.id,
+            destination_account_id=destination.id,
+            amount=Decimal("10.00"),
+            currency=Currency.CNY,
+            idempotency_key="history-transfer",
+        )
+        verifier = DevelopmentTransferAuthorizationVerifier({(draft.id, owner.id, "grant")})
+        TransferService(session, verifier).commit_transfer(draft.id, owner.id, "grant")
+        source_history = TransactionHistoryService(session).account_history(
+            source.id, owner.id, AccountTransactionFilters()
+        )
+        destination_history = TransactionHistoryService(session).account_history(
+            destination.id, destination.user_id, AccountTransactionFilters()
+        )
+        assert any(
+            item.transaction.kind == TransactionKind.TRANSFER
+            and item.direction == TransactionDirection.DEBIT
+            for item in source_history
+        )
+        assert any(
+            item.transaction.kind == TransactionKind.TRANSFER
+            and item.direction == TransactionDirection.CREDIT
+            for item in destination_history
+        )
+        assert not any(
+            item.kind == TransactionKind.TRANSFER
+            for item in ExpenseService(session).list(owner.id, ExpenseFilters())
+        )
+
+        balance_before = source.balance
+        expense = ExpenseRecordService(session).create(
+            owner.id,
+            amount=Decimal("5.00"),
+            currency=Currency.CNY,
+            merchant="coke",
+            category=None,
+            occurred_at=datetime.now(UTC),
+            account_id=None,
+            origin=TransactionOrigin.CASH,
+            idempotency_key="manual-coke",
+        )
+        assert expense.kind == TransactionKind.EXPENSE
+        assert expense.origin == TransactionOrigin.CASH
+        session.refresh(source)
+        assert source.balance == balance_before
+        expenses = ExpenseService(session).list(owner.id, ExpenseFilters())
+        assert any(item.id == expense.id for item in expenses)
+        summary = ExpenseService(session).summary(owner.id, ExpenseFilters())
+        assert summary.totals_by_currency[Currency.CNY.value] >= Decimal("5.00")
+        activity = TransactionHistoryService(session).activity(owner.id, 50, 0)
+        assert any(
+            item.transaction.id == expense.id
+            and item.direction == TransactionDirection.DEBIT
+            for item in activity
+        )
+
+
+def test_expense_api_create_update_delete_and_activity(migrated_database: str) -> None:
+    engine = create_engine(migrated_database)
+    with Session(engine) as session, session.begin():
+        seed(session)
+    with Session(engine) as session:
+        owner = session.scalar(
+            select(UserModel).where(UserModel.email == "lin.xiaoyu@example.invalid")
+        )
+        assert owner is not None
+
+    def override_session():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_current_user_id] = lambda: owner.id
+    try:
+        with TestClient(app) as client:
+            created = client.post(
+                "/expenses",
+                headers={"Idempotency-Key": "api-coke"},
+                json={
+                    "amount": "5.00",
+                    "currency": "CNY",
+                    "merchant": "coke",
+                    "category": "GROCERIES",
+                    "origin": "CASH",
+                },
+            )
+            assert created.status_code == 200, created.text
+            payload = created.json()
+            assert payload["kind"] == "EXPENSE"
+            assert payload["direction"] == "DEBIT"
+            expense_id = payload["id"]
+            updated = client.patch(
+                f"/expenses/{expense_id}", json={"category": "DINING"}
+            )
+            assert updated.status_code == 200, updated.text
+            assert updated.json()["category"] == "DINING"
+            activity = client.get("/activity", params={"limit": 100})
+            assert activity.status_code == 200
+            assert any(item["id"] == expense_id for item in activity.json()["items"])
+            listed = client.get("/transactions", params={"limit": 100})
+            assert listed.status_code == 200
+            assert any(item["id"] == expense_id for item in listed.json()["items"])
+            deleted = client.delete(f"/expenses/{expense_id}")
+            assert deleted.status_code == 204
+            after = client.get("/activity", params={"limit": 100})
+            assert not any(item["id"] == expense_id for item in after.json()["items"])
+    finally:
+        app.dependency_overrides.clear()

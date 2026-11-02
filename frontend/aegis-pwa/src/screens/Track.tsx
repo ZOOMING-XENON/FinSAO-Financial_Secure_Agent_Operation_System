@@ -14,6 +14,7 @@ interface Found {
   photo: number;
   merchant: string;
   amount: string;
+  currency: string;
   date: string | null;
   cat: Category;
   kind: 'out' | 'in';
@@ -45,14 +46,14 @@ export function Track() {
       try {
         const guesses = await recognizeReceipt(files[i], p => setProgress(Math.round(p * 100)));
         for (const g of guesses) {
-          found.push({ id: uid(), photo: i, merchant: g.merchant, amount: g.amount ?? '', date: g.date, cat: g.category, kind: g.kind, include: g.kind === 'out' });
+          found.push({ id: uid(), photo: i, merchant: g.merchant, amount: g.amount ?? '', currency: g.currency, date: g.date, cat: g.category, kind: g.kind, include: g.kind === 'out' });
         }
       } catch {
         /* unreadable picture: the others still count */
       }
       setItems([...found]);
     }
-    if (!found.length) found.push({ id: uid(), photo: 0, merchant: '', amount: '', date: null, cat: 'UNKNOWN', kind: 'out', include: true });
+    if (!found.length) found.push({ id: uid(), photo: 0, merchant: '', amount: '', currency: 'CNY', date: null, cat: 'UNKNOWN', kind: 'out', include: true });
     setItems(found);
     setState(found.some(x => x.amount) ? 'done' : 'failed');
   };
@@ -78,12 +79,40 @@ export function Track() {
   };
 
   const chosen = items.filter(x => x.include && isValidAmount(x.amount));
-  const saveCash = () => {
+  const saveCash = async () => {
     if (!chosen.length) return toast(t('pay.invalidAmount'));
-    for (const x of chosen) {
-      const cat = x.kind === 'in' ? (/工资|薪|salary|payroll/i.test(x.merchant) ? 'salary' : 'other') : ledgerCatFor(x.cat);
-      addLedgerEntry({ id: uid(), kind: x.kind, cat, cents: normalizeAmount(x.amount), note: x.merchant.trim(), at: x.date ? `${x.date}T12:00:00` : new Date().toISOString() });
+    if (chosen.some(x => !x.merchant.trim())) return toast(t('track.merchantRequired'));
+    const saveLocal = (rows: Found[]) => {
+      for (const x of rows) {
+        const cat = x.kind === 'in' ? (/salary|payroll/i.test(x.merchant) ? 'salary' : 'other') : ledgerCatFor(x.cat);
+        addLedgerEntry({ id: uid(), kind: x.kind, cat, cents: normalizeAmount(x.amount), note: x.merchant.trim(), at: x.date ? `${x.date}T12:00:00` : new Date().toISOString() });
+      }
+    };
+    const outgoing = chosen.filter(item => item.kind === 'out');
+    if (api.core === 'live' && outgoing.length > 0) {
+      try {
+        for (const x of outgoing) {
+          await api.post('/expenses', {
+            amount: normalizeAmount(x.amount),
+            currency: x.currency,
+            merchant: x.merchant.trim(),
+            category: x.cat,
+            occurred_at: x.date ? new Date(`${x.date}T12:00:00`).toISOString() : undefined,
+            origin: 'MANUAL',
+          }, { 'Idempotency-Key': `receipt-${x.id}` });
+        }
+        saveLocal(chosen.filter(item => item.kind === 'in'));
+        toast(chosen.length > 1 ? t('track.savedMany', { n: chosen.length }) : t('track.savedCash'));
+        recent.reload();
+        refresh();
+        go('activity');
+        return;
+      } catch (e) {
+        toast(errorText(e));
+        return;
+      }
     }
+    saveLocal(chosen);
     toast(chosen.length > 1 ? t('track.savedMany', { n: chosen.length }) : t('track.savedCash'));
     go('ledger');
   };
@@ -223,7 +252,7 @@ export function Track() {
               </section>
             );
           })}
-          <button className="btn dark" style={{ marginTop: 14 }} onClick={saveCash} disabled={!chosen.length}>
+          <button className="btn dark" style={{ marginTop: 14 }} onClick={() => void saveCash()} disabled={!chosen.length}>
             <Icon name="i-book" />
             {chosen.length > 1 ? t('track.saveAll', { n: chosen.length }) : t('track.saveCash')}
           </button>

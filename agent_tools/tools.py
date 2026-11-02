@@ -8,7 +8,14 @@ from pydantic import BaseModel, Field
 from agent_tools.client import BankingHttpClient
 from agent_tools.contracts import BaseBankingTool, ExecutionContext
 from agent_tools.registry import ToolRegistry
-from banking_core.app.domain.enums import Currency, TransactionStatus, TransferStatus
+from banking_core.app.domain.enums import (
+    Currency,
+    TransactionDirection,
+    TransactionKind,
+    TransactionOrigin,
+    TransactionStatus,
+    TransferStatus,
+)
 from banking_core.app.domain.money import MoneyDecimal
 
 
@@ -52,10 +59,16 @@ class TransactionItem(BaseModel):
     id: UUID
     reference: str
     status: TransactionStatus
+    kind: TransactionKind = TransactionKind.EXPENSE
+    origin: TransactionOrigin = TransactionOrigin.BANK
+    direction: TransactionDirection | None = None
+    account_id: UUID | None = None
     amount: Decimal
     currency: Currency
     description: str
+    merchant: str | None = None
     category: str | None
+    category_source: str | None = None
     posted_at: datetime | None
 
 
@@ -327,6 +340,7 @@ class CommitTransferTool(BaseBankingTool[CommitTransferInput, TransferReceiptOut
 def register_default_tools(registry: ToolRegistry, client: BankingHttpClient) -> None:
     from agent_tools.analytics_tools import analytics_tools
     from agent_tools.cards_wealth_tools import cards_wealth_tools
+    from agent_tools.expense_tools import expense_tools
     from agent_tools.savings_tools import savings_tools
 
     tools: list[BaseBankingTool[Any, Any]] = [
@@ -347,6 +361,8 @@ def register_default_tools(registry: ToolRegistry, client: BankingHttpClient) ->
     for tool in cards_wealth_tools(client):
         registry.register(tool)
     for tool in savings_tools(client):
+        registry.register(tool)
+    for tool in expense_tools(client):
         registry.register(tool)
 
 class RecentRecipientsInput(BaseModel):

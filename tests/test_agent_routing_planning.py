@@ -207,7 +207,7 @@ async def test_english_locale_localizes_fallback_and_transfer_form() -> None:
     fallback = await service.handle(
         AgentRequest(
             session_id=session_id,
-            message="I spend 200 on campus, track that",
+            message="I need help with my account",
             locale="en-US",
         ),
         _context(session_id),

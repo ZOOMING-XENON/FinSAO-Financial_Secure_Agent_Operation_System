@@ -1,24 +1,27 @@
 # Python dependencies for local development, tests, and the competition demo.
 # Keep these ranges aligned with pyproject.toml; uv.lock remains the fully pinned lockfile.
 #
-# System dependency for the frontend (not installable by pip/uv):
-# Node.js >= 18 — required to run frontend/demo-final/server.mjs.
-# Verify with: node --version
+# System dependencies are documented in README.md. Node.js, PostgreSQL, and Docker
+# are not Python packages and do not belong in this file.
 
 # Runtime
 alembic>=1.13,<2
 fastapi>=0.115,<1
 httpx>=0.27,<1
+langchain-core>=1.2,<2
 langgraph==1.2.17
 langgraph-checkpoint-postgres==3.2.0
 psycopg[binary]>=3.2,<4
 pydantic>=2.9,<3
 pydantic-settings>=2.5,<3
+python-multipart>=0.0.9,<1
 sqlalchemy>=2.0,<3
 uvicorn[standard]>=0.30,<1
+tzdata>=2025.2
 
 # Development, tests, type checking, and evaluation figures
 mypy>=1.11,<2
+matplotlib>=3.8,<4
 numpy>=1.26,<2.4
 pytest>=8.3,<9
 pytest-asyncio>=0.24,<1

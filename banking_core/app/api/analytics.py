@@ -18,8 +18,8 @@ from banking_core.app.schemas.analytics import (
     BudgetUpdateRequest,
     CancelSubscriptionRequest,
     CategoryCorrectionRequest,
-    ExpenseLabelWriteRequest,
     ExpenseLabelAttemptRequest,
+    ExpenseLabelWriteRequest,
     ExpenseSummaryResponse,
     ReminderRequest,
     ReminderResponse,
@@ -33,8 +33,8 @@ from banking_core.app.services.analytics import (
     SubscriptionService,
 )
 from banking_core.app.services.expense_labeling import (
-    LabelAttempt,
     ExpenseLabelingService,
+    LabelAttempt,
     LabelWrite,
 )
 from banking_core.app.services.expenses import ExpenseFilters, ExpenseService

@@ -31,11 +31,9 @@ export async function loadAccounts(): Promise<AccountWithBalance[]> {
   return accounts.map((a, i) => ({ ...a, name: zh ? ACCOUNT_ZH[a.name] ?? a.name : a.name, balance: balances[i].balance }));
 }
 
-export async function loadRecent(accounts: Account[], limit = 20): Promise<Transaction[]> {
-  const pages = await Promise.all(accounts.map(a => api.get<TransactionPage>(`/accounts/${a.id}/transactions`, { limit })));
-  const seen = new Map<string, Transaction>();
-  pages.flatMap(p => p.items).forEach(tx => seen.set(tx.id, tx));
-  return [...seen.values()].sort((a, b) => (b.posted_at ?? '').localeCompare(a.posted_at ?? '')).slice(0, limit);
+export async function loadRecent(_accounts: Account[], limit = 20): Promise<Transaction[]> {
+  const page = await api.get<TransactionPage>('/activity', { limit });
+  return page.items.slice(0, limit);
 }
 
 export async function loadBudgetViews(): Promise<BudgetView[]> {

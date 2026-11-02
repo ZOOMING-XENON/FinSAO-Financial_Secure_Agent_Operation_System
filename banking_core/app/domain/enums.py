@@ -13,6 +13,29 @@ class AccountStatus(StrEnum):
     CLOSED = "CLOSED"
 
 
+class TransactionKind(StrEnum):
+    EXPENSE = "EXPENSE"
+    INCOME = "INCOME"
+    REFUND = "REFUND"
+    TRANSFER = "TRANSFER"
+    OPENING_BALANCE = "OPENING_BALANCE"
+    ADJUSTMENT = "ADJUSTMENT"
+
+
+class TransactionOrigin(StrEnum):
+    BANK = "BANK"
+    CARD = "CARD"
+    CASH = "CASH"
+    MANUAL = "MANUAL"
+    IMPORT = "IMPORT"
+
+
+class TransactionDirection(StrEnum):
+    DEBIT = "DEBIT"
+    CREDIT = "CREDIT"
+    MOVE = "MOVE"
+
+
 class TransactionStatus(StrEnum):
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
