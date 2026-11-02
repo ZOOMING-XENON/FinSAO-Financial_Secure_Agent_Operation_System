@@ -1,111 +1,149 @@
-# 总体架构
+中文 | [English](Architecture.en.md)
 
-[返回文档总览](README.md) · [核心算法](Algorithm.md) · [安全设计](Security.md)
+# Aegis 总体架构
 
-Aegis 把自然语言理解和金融状态变更放在两个独立模块中。页面请求与聊天请求先进入 Node 代理：前者直接调用 Banking Core，后者交给 Agent。Agent 只能通过有类型的工具接口访问 Core；账户余额、业务状态和审批结果最终以 Core 保存的事实为准。下图描述当前仓库的主要运行路径，虚线表示可选或尚未启用的路径。
+Aegis 将“理解用户”和“改变金融状态”分离。Agent 可以提出意图、参数和执行计划，但只有 Banking Core 能判断资源归属、签发授权并提交金融事务。
+
+## 1. 运行时组件
 
 ```mermaid
 flowchart TB
-    U[个人用户] --> F[Aegis PWA / Capacitor 前端]
-    F -->|同源 /api/core：结构化业务| N[Node 代理]
-    F -->|同源 /api/agent：聊天任务| N
-    N -->|服务令牌 + HTTP| C[Banking Core FastAPI]
-    N -->|服务令牌 + HTTP| A[Agent FastAPI]
-    A --> R[路由 / SlotTracker / Planner]
-    R --> V[CapabilityBroker / PlanVerifier]
-    V --> G[ToolGateway + BankingHttpClient]
-    G -->|类型化 HTTP + Trace ID| C
-    A -->|可选的结构化推断| L[DeepSeek / Qwen / 本地模型]
-    A --> T[(Agent 任务与事件)]
-    A --> P[(LangGraph checkpoint)]
-    C --> S[策略 / 审批 / MFA / 业务服务]
-    S --> D[(PostgreSQL 金融数据、账本、审计)]
-    J[Jev 路由适配器：未接入在线入口] -.-> A
-```
-
-图中的三个数据库形状表示**数据职责**，不表示必须部署三个数据库实例。默认配置可将 Core 表、Agent 公开任务表与 LangGraph checkpoint 放在同一 PostgreSQL 实例。Core 由 [`banking_core/app/main.py`](../banking_core/app/main.py) 装配；Agent 由 [`agent/app.py`](../agent/app.py) 装配；前端代理位于 [`frontend/aegis-pwa/server.mjs`](../frontend/aegis-pwa/server.mjs)。
-
-## 两条请求路径
-
-结构化页面已经知道要办理的业务。例如转账页面收集收款账号、金额与付款账户，直接经 `/api/core` 调用 Core 的草稿和审批接口。这里不经过 LLM，但同样受 Core 的所有权、风控、授权和幂等规则约束。Aegis 的聊天页经 `/api/agent` 创建任务；模型或规则只生成候选意图与参数，Agent 在调用工具前进行确定性验证。
-
-代理在转发时覆盖浏览器提交的 `Authorization`，为 Core 和 Agent 分别注入服务端令牌。原生 Capacitor 应用通过配置的代理地址访问后端；仓库提供开发代理和允许来源列表，公开部署仍需单独配置 HTTPS、正式认证与密钥管理。参见 [`server.mjs`](../frontend/aegis-pwa/server.mjs) 与 [`vite.config.ts`](../frontend/aegis-pwa/vite.config.ts)。
-
-## Agent 内部的模块接口
-
-| 模块 | 对调用方暴露的接口与责任 | 关键实现 |
-| --- | --- | --- |
-| 路由与参数提取 | 返回结构化 `IntentResult`，再把明确事实与模型推断分开。 | [`agent/hybrid.py`](../agent/hybrid.py)、[`agent/context.py`](../agent/context.py) |
-| 计划与验证 | 接收候选 `TaskPlan`，检查依赖、动作权限、参数来源和 Tool Schema。 | [`agent/planning.py`](../agent/planning.py)、[`agent/capabilities.py`](../agent/capabilities.py) |
-| 工具接口 | 在 HTTP 接缝处验证入参与出参，传递服务凭据、幂等键和 Trace ID。 | [`agent_tools/gateway.py`](../agent_tools/gateway.py)、[`agent_tools/client.py`](../agent_tools/client.py) |
-| 持久任务 | 将公开任务状态与运行图 checkpoint 分开；审批后恢复执行。 | [`agent/durable.py`](../agent/durable.py)、[`agent/graph.py`](../agent/graph.py) |
-| 金融内核 | 在事务中执行业务规则、授权校验、资金变动、记账与审计。 | [`banking_core/app/services`](../banking_core/app/services/)、[`banking_core/app/security`](../banking_core/app/security/) |
-
-ToolGateway 和 Core HTTP 接口是有实际价值的接缝：前端和 Agent 都复用 Core 规则，Agent 的测试可替换 HTTP 适配器，而金融数据库始终由 Core 所有。`JevRoutingBoundary` 已单独实现并有测试，但 [`agent/app.py`](../agent/app.py) 尚未装配它，不能把虚线理解为当前在线流量。
-
-## 自然语言任务如何推进
-
-下图以需要审批的金融写操作为例。普通只读查询在工具返回后即可完成；缺少参数时会先进入澄清表单。下图的“授权”指 Banking Core 发出的、与具体操作绑定的凭证，不是模型或前端自行声明的许可。
-
-```mermaid
-sequenceDiagram
-    actor User as 用户
-    participant UI as Aegis
-    participant Agent as Agent / LangGraph
-    participant Tool as ToolGateway
-    participant Core as Banking Core
-    participant DB as PostgreSQL
-    User->>UI: 输入自然语言
-    UI->>Agent: 创建任务 + 会话上下文
-    Agent->>Agent: 路由、来源追踪、计划验证
-    alt 参数缺失或推断值待确认
-        Agent-->>UI: NEEDS_CLARIFICATION + 表单
-        User->>UI: 确认表单
-        UI->>Agent: confirmation
+    subgraph Client[不受信客户端]
+      UI[Aegis PWA<br/>React / Vite / Capacitor]
     end
-    Agent->>Tool: 经过验证的 ToolCall
-    Tool->>Core: 类型化 HTTP 请求
-    Core->>DB: 核查身份、资源与业务规则
-    Core-->>Agent: 草稿 / WAITING_APPROVAL
-    Agent-->>UI: 待审批任务
-    User->>UI: 确认或输入模拟 MFA
-    UI->>Core: 创建并完成审批
-    Core-->>UI: 一次性授权引用
-    UI->>Agent: resume(授权引用)
-    Agent->>Tool: 提交指定业务
-    Tool->>Core: 提交 + 授权引用
-    Core->>DB: 事务内复核、记账、审计
-    Core-->>Agent: 已确认的业务状态
-    Agent-->>UI: 完成或需对账的结果
+    subgraph Edge[本地应用边界]
+      Proxy[Node 静态服务器与反向代理<br/>CSP / CORS / 服务令牌注入]
+    end
+    subgraph AgentZone[Agent 服务 :8100]
+      API[FastAPI 对话与任务 API]
+      Dec[TaskDecomposer]
+      Orch[ConversationOrchestrator]
+      Exec[AgentService / LangGraph]
+      Gateway[ToolGateway + 工具注册表]
+      Models[主 LLM / 可选 Jev / 隐私代理]
+    end
+    subgraph CoreZone[Banking Core :8000]
+      CoreAPI[FastAPI 业务 API]
+      Policy[所有权 / PolicyEngine / Approval]
+      Domain[服务 / 事务 / 复式账本]
+    end
+    UI --> Proxy
+    Proxy --> API
+    Proxy --> CoreAPI
+    API --> Dec --> Orch --> Exec --> Gateway --> CoreAPI
+    Dec -.-> Models
+    Exec -.-> Models
+    CoreAPI --> Policy --> Domain
+    Orch --> AgentDB[(Agent 状态)]
+    Exec --> Checkpoint[(LangGraph checkpoint)]
+    Domain --> CoreDB[(金融数据与审计)]
 ```
 
-批准流程的 API 由 Core 的 [`api/security.py`](../banking_core/app/api/security.py) 提供；LangGraph 的在线运行图在 [`build_runtime_agent_graph`](../agent/graph.py) 中处理暂停、恢复和结果未知时的查询对账。当前并没有通用的业务补偿节点；“取消任务”也不等于撤销已经入账的交易。
+### Aegis PWA 与 Node 代理
 
-## 安全保证：每个输入输出在哪里受控
+PWA 提供账户、转账、预算、卡片、理财、储蓄目标和对话界面。浏览器只访问同源的 `/api/core/*` 与 `/api/agent/*`。`frontend/aegis-pwa/server.mjs` 删除浏览器提供的认证头，分别注入 Core 和 Agent 服务令牌，并设置 CSP、CORS 与 `no-store` API 缓存策略。Capacitor 原生壳使用受限来源列表。
+
+### Agent 服务
+
+`agent/app.py` 是在线装配入口。它提供：
+
+- v2 多轮入口 `/agent/bundles/turns` 与审批恢复接口；
+- 兼容的单次 `/agent/requests`；
+- Durable Task 的创建、查询、恢复、取消、人工接管和事件流；
+- 可选票据解析、语音转写和主动建议接口。
+
+Agent 的职责是拆解、澄清、确认、规划和编排。它只经 `ToolGateway` 调用注册工具，不能直接写 Core 数据库。
+
+### Banking Core
+
+Core 是金融事实权威。它独立完成服务认证、开发用户映射、资源所有权检查、策略评估、审批/MFA、授权消费、幂等控制、行锁、业务状态迁移和复式记账。即使 Agent 或模型提出越权参数，Core 仍会拒绝。
+
+## 2. 两条用户路径
 
 ```mermaid
 flowchart LR
-    UI[浏览器输入] -->|请求 / 语音转文字| Proxy[Node 代理]
-    Proxy -->|服务端令牌| Agent[Agent 请求契约]
-    Agent -->|有限候选意图与 Slot| Verify[计划与来源验证]
-    Verify -->|允许的工具名和参数| Gateway[类型化工具]
-    Gateway -->|HTTP、Trace ID、幂等键| Core[Core 策略与业务事务]
-    Core -->|状态 / 错误 / 审计| Data[(金融数据)]
-    Core -->|已核验结果| Gateway
-    Gateway -->|ToolResult| Agent
-    Agent -->|任务状态与结果| UI
+    UI[用户界面] --> Choice{入口}
+    Choice -->|结构化页面| Form[类型化 Core 请求]
+    Form --> Core[Banking Core]
+    Choice -->|自然语言| Turn[Bundle Turn]
+    Turn --> Bundle[Task Bundle]
+    Bundle --> Item[逐个任务项]
+    Item --> Agent[AgentService]
+    Agent --> Tool[注册工具]
+    Tool --> Core
 ```
 
-- **浏览器 → 代理：** 代理替换传入的认证头，仅从服务器环境读取服务令牌。前端不承担银行身份判定。来源检查限制跨域调用，但它不是用户登录机制。
-- **代理 → Agent：** `AgentRequest` 拒绝明显的认证秘密和非法字段；开发身份由服务端配置注入。用户文本及模型候选始终按不可信输入处理。
-- **Agent → 工具：** `CapabilityBroker` 缩小可用动作，`PlanVerifier` 拒绝未知工具、循环依赖和模型推断的执行参数；Gateway 校验请求与响应模型。
-- **工具 → Core：** Core 再查资源归属与操作状态，按风险决定确认或模拟 MFA。一次性授权须匹配当前操作及请求内容，资金写入发生在事务内。
-- **Core → Agent → 用户：** 金融结果取自 Core，Agent 保存任务状态并据此组织回答。未知写入结果会查询状态；查不到确定结果时不报告成功。
+结构化页面跳过自然语言理解，但不会跳过 Core 安全检查。自然语言路径多一层任务束和参数确认；进入 Core 后，两条路径共享相同的业务与授权规则。
 
-各控制点的代码与未覆盖范围见[安全设计](Security.md)。
+## 3. 多意图任务束
 
-## 部署与持久化边界
+```mermaid
+stateDiagram-v2
+    [*] --> PROPOSED
+    PROPOSED --> NEEDS_CLARIFICATION: 缺少或冲突字段
+    PROPOSED --> NEEDS_CONFIRMATION: 有模型建议的写入参数
+    PROPOSED --> COMPLETED: 只读任务完成
+    PROPOSED --> DEFERRED_UNSUPPORTED: 已知但未开放的对话能力
+    NEEDS_CLARIFICATION --> PROPOSED: 用户回复当前项
+    NEEDS_CONFIRMATION --> PROPOSED: 用户确认当前项
+    PROPOSED --> WAITING_APPROVAL: Core 返回待审批
+    WAITING_APPROVAL --> COMPLETED: 授权恢复并提交
+    PROPOSED --> FAILED: 不可恢复错误
+    WAITING_APPROVAL --> FAILED: 审批或提交失败
+```
 
-`docker-compose.yml` 目前只声明 PostgreSQL 和 Banking Core 容器；Agent 与 Aegis 可按各自入口另启进程。Agent 配置了 PostgreSQL checkpoint 时会在启动期装配持久化 saver；未配置时在线图使用 `MemorySaver`，不能跨进程重启恢复图状态。Agent 任务表仍依赖独立配置的数据库连接。区分公开任务表、图 checkpoint 和 Core 的金融表，可避免把“任务显示完成”误当作“金融事务已提交”。
+`TaskDecomposer` 最多输出五个 `ProposedTask`，每项包含稳定 key、意图、原文证据、候选槽位和依赖 key。`ConversationOrchestrator` 把它们持久化为 Task Bundle，只有依赖已完成的任务项才可执行。表单确认必须同时匹配 bundle、item 和 intent，防止旧卡片修改新任务。
 
-本地 Core 和 Agent 默认以 HTTP 通信，并使用静态开发服务令牌；仓库没有实现进程间 TLS/mTLS 或报文加密。要部署到真实网络，应增加正式身份认证、传输加密、密钥托管与网络访问控制。当前架构属于可验证的演示系统架构，而非生产银行接入方案。
+任务束聚合状态包括 `RUNNING`、`NEEDS_CLARIFICATION`、`NEEDS_CONFIRMATION`、`WAITING_APPROVAL`、`PARTIALLY_COMPLETED`、`COMPLETED` 和 `FAILED`。某项失败不会把已成功的独立项回滚；界面必须逐项呈现结果。
+
+## 4. 依赖事实流：余额百分比转账
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant O as 编排器
+    participant C as Banking Core
+    participant M as LLM
+    U->>O: 查询活期余额，并转 10% 给妈妈
+    O->>C: get_balance(checking)
+    C-->>O: 已验证余额 1440.00 + 账户引用
+    O->>M: 请求 + 最近对话 + verified_balances + 收款人临时候选
+    M-->>O: percentage=10, balance_ref=..., recipient_key=...
+    O->>O: 校验引用并以 Decimal 计算 144.00
+    O-->>U: 展示账户、妈妈、CNY 144.00 的确认卡
+    U->>O: 参数确认
+    O->>C: 创建草稿并进入 Core 审批链
+```
+
+模型不负责提供余额或真实收款账户 ID。余额来自已完成依赖项；收款人模型只看到临时候选 key、姓名和昵称，服务端再映射真实 ID。币种缺省为 CNY，但仍会显示在确认卡中。
+
+## 5. 数据与持久化职责
+
+```mermaid
+flowchart LR
+    Agent[Agent Service] --> A[(Agent public state)]
+    Agent --> K[(LangGraph checkpoint)]
+    Core[Banking Core] --> F[(Financial state)]
+    A --- A1[session / messages / bundles / items / tasks / events]
+    K --- K1[图执行恢复点]
+    F --- F1[users / accounts / drafts / approvals / grants / ledger / audit]
+```
+
+三类数据可以使用同一个 PostgreSQL 实例，但不可混淆：
+
+- **Agent public state** 使用 `AGENT_DATABASE_URL`，由 Alembic 迁移管理，保存会话、消息、任务束、任务项、持久任务和事件。
+- **LangGraph checkpoint** 使用 `AGENT_CHECKPOINT_DATABASE_URL`；未配置时在线进程回退到内存 checkpoint，重启后不保留。
+- **Financial state** 使用 `DATABASE_URL`，保存 Core 领域事实、审批授权、账本和审计。
+
+Core 的金融完成状态高于 Agent 的展示状态。发生网络超时时，不能仅凭 Agent 失败消息推断资金未变动，应使用任务 ID、Trace ID 和 Core 状态对账。
+
+## 6. 模型与 Jev 的位置
+
+主 LLM 处理复杂拆解、结构化候选、收款人排序和自然对话。Jev 在 `JEV_ENABLED=true` 且 API key 有效时可参与高置信简单分类、消费标注和可选计划复核。低置信、服务不可用或结构非法时转主 LLM、修复或澄清；Jev 不决定风险等级，也不持有授权。
+
+`PRIVACY_BROKER_ENABLED=true` 时，模型出站文本先经过确定性尽力脱敏。此层不是完整匿名化，详细边界见[安全设计](Security.md)。
+
+## 7. 部署现状
+
+`docker-compose.yml` 当前编排 PostgreSQL 与 Banking Core。Agent 和 PWA 按根目录 README 分别启动。默认通信是本机 HTTP 加服务令牌，不包含 TLS 或 mTLS。生产化时至少需要独立身份提供方、密钥管理、网络加密、数据库隔离/备份、集中日志和监控告警。
+
