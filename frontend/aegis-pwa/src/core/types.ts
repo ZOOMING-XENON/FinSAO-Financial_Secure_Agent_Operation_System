@@ -169,8 +169,23 @@ export interface SavingsPot {
   target_date: string;
   status: string;
   allocation_mode: 'ACCOUNT_FUNDED';
+  /** Annual rate as a decimal string ("0.0150" = 1.5%); absent on older backends. */
+  interest_rate?: string;
+  interest_earned?: Money;
+  interest_accrued_until?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface SavingsInterestPayment {
+  id: string;
+  pot_id: string;
+  period_start: string;
+  period_end: string;
+  rate: string;
+  balance: Money;
+  amount: Money;
+  created_at: string;
 }
 
 export interface SavingsContribution {

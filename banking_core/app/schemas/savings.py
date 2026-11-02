@@ -36,6 +36,9 @@ class SavingsPotResponse(SavingsModel):
     target_date: date
     status: str
     allocation_mode: Literal["ACCOUNT_FUNDED"]
+    interest_rate: Decimal
+    interest_earned: Decimal
+    interest_accrued_until: date | None
     created_at: datetime
     updated_at: datetime
 
@@ -56,4 +59,15 @@ class SavingsContributionResponse(SavingsModel):
     transaction_id: UUID | None
     amount: Decimal
     note: str | None
+    created_at: datetime
+
+
+class SavingsInterestPaymentResponse(SavingsModel):
+    id: UUID
+    pot_id: UUID
+    period_start: date
+    period_end: date
+    rate: Decimal
+    balance: Decimal
+    amount: Decimal
     created_at: datetime
