@@ -237,6 +237,9 @@ function AmountStep({ to, accounts, onBack, onSent }: { to: Beneficiary; account
       ],
     });
     if (!ref) {
+      // Cancel the unfinished draft so it stops counting towards today's ¥1,000 limit.
+      api.post(`/transfers/${draft.id}/cancel`, {}).catch(() => undefined);
+      intent.current = null;
       setBusy(false);
       return setMsg(t('pay.cancelled'));
     }

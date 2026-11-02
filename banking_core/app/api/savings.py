@@ -8,6 +8,7 @@ from banking_core.app.api.dependencies import get_current_user_id, get_db_sessio
 from banking_core.app.schemas.savings import (
     SavingsContributionRequest,
     SavingsContributionResponse,
+    SavingsInterestPaymentResponse,
     SavingsPotCreateRequest,
     SavingsPotResponse,
     SavingsPotUpdateRequest,
@@ -73,6 +74,16 @@ def list_savings_contributions(
     return [
         SavingsContributionResponse.model_validate(item)
         for item in SavingsPotService(session).list_contributions(pot_id, actor)
+    ]
+
+
+@router.get("/{pot_id}/interest", response_model=list[SavingsInterestPaymentResponse])
+def list_savings_interest(
+    pot_id: UUID, session: Db, actor: Actor
+) -> list[SavingsInterestPaymentResponse]:
+    return [
+        SavingsInterestPaymentResponse.model_validate(item)
+        for item in SavingsPotService(session).list_interest(pot_id, actor)
     ]
 
 

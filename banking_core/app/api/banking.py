@@ -373,6 +373,20 @@ def commit_transfer(
     )
 
 
+@router.post(
+    "/transfers/{draft_id}/cancel", response_model=TransferDraftResponse, tags=["transfers"]
+)
+def cancel_transfer(
+    draft_id: UUID,
+    session: Db,
+    actor_id: Actor,
+    verifier: Verifier,
+) -> TransferDraftResponse:
+    return TransferDraftResponse.model_validate(
+        TransferService(session, verifier).cancel_transfer(draft_id, actor_id)
+    )
+
+
 @router.get("/transfers/{transfer_id}", response_model=TransferDraftResponse, tags=["transfers"])
 def get_transfer_status(
     transfer_id: UUID,

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { api } from '../core/api';
-import { CATEGORIES, type Transaction } from '../core/types';
+import { PICKABLE, type Transaction } from '../core/types';
 import { categoryKey, direction, txTitle } from '../core/format';
 import { withCash } from '../core/ledger';
 import { formatMoney, fromCents, isValidAmount, normalizeAmount, toCents } from '../core/money';
@@ -179,7 +179,7 @@ export function BudgetSheet({ open, onClose, month, onSaved }: { open: boolean; 
         {t('trends.category')}
       </label>
       <select id="b-cat" className="input" value={category} onChange={e => setCategory(e.target.value)}>
-        {CATEGORIES.map(c => (
+        {PICKABLE.map(c => (
           <option key={c} value={c}>
             {t(`cat.${c}`)}
           </option>

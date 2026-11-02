@@ -201,6 +201,10 @@ export function Cards() {
           </p>
         )}
       </section>
+      <p className="device-note">
+        <Icon name="i-info" />
+        {t('cards.cashNote')}
+      </p>
 
       <section className="card flush">
         <div className="card-h">

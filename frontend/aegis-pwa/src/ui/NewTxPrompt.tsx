@@ -2,7 +2,7 @@
 // then saves the category to Banking Core. Each transaction is asked about once per device.
 import { useEffect, useState } from 'react';
 import { api } from '../core/api';
-import { CATEGORIES, type Category, type Transaction } from '../core/types';
+import { PICKABLE, type Category, type Transaction } from '../core/types';
 import { categoryKey, direction, formatDate } from '../core/format';
 import { formatMoney } from '../core/money';
 import { useApp, useClient } from '../app/state';
@@ -38,7 +38,7 @@ export function NewTxPrompt() {
     if (core === 'checking') return;
     let alive = true;
     (async () => {
-      const tx = (await loadRecent(await loadAccounts(), 60)).filter(x => direction(x) === 'out');
+      const tx = (await loadRecent(await loadAccounts(), 60)).filter(x => direction(x) === 'out' && x.category !== 'INTERNAL_TRANSFER');
       let seen = readSeen();
       if (!seen) {
         // First run: only payments from the last day and a half count as new.
@@ -87,7 +87,7 @@ export function NewTxPrompt() {
             {cur.description} · {formatMoney(cur.amount, cur.currency)} · {formatDate(cur.posted_at, locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
           </p>
           <div className="cat-pick">
-            {CATEGORIES.map(c => (
+            {PICKABLE.map(c => (
               <button key={c} className={pick === c ? 'on' : ''} onClick={() => setPick(c)} aria-pressed={pick === c}>
                 <span className="ico">
                   <Icon name={'c-' + c} />

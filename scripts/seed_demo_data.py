@@ -318,6 +318,9 @@ def seed(session: Session) -> None:
                 status="ACTIVE",
                 allocation_mode="VIRTUAL_ALLOCATION",
                 idempotency_key=f"seed-{user_key}-travel",
+                # Interest starts from 1 September so the demo shows a first credit.
+                interest_rate=Decimal("0.0150"),
+                interest_accrued_until=date(2026, 9, 1),
             ),
         )
 
