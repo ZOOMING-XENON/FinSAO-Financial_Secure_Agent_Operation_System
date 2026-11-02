@@ -14,6 +14,7 @@ from langgraph.types import interrupt
 
 from agent.contracts import AgentRequest, AgentResponse, AgentResponseStatus, TrustedAgentContext
 from agent.localization import contains_cjk, is_english
+from agent.routing import Intent
 from agent.service import AgentService, Gateway
 from agent_tools.contracts import ExecutionContext, ToolResultStatus
 
@@ -34,7 +35,7 @@ class AgentState(TypedDict, total=False):
     error_code: str
     retry_count: int
     request: dict[str, Any]
-    context: dict[str, str]
+    context: dict[str, Any]
     response: dict[str, Any]
 
 
@@ -175,6 +176,12 @@ def build_runtime_agent_graph(
             session_id=UUID(raw_context["session_id"]),
             task_id=UUID(raw_context["task_id"]),
             trace_id=UUID(raw_context["trace_id"]),
+            expected_intent=(
+                Intent(raw_context["expected_intent"])
+                if raw_context.get("expected_intent")
+                else None
+            ),
+            expected_slots=raw_context.get("expected_slots") or {},
         )
         response = await service.handle(request, context)
         return {

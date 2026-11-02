@@ -232,6 +232,37 @@ export interface AgentTask {
   error_code: string | null;
 }
 
+export interface AgentBundleItem {
+  item_id: string;
+  item_key: string;
+  intent: string;
+  evidence: string;
+  status: string;
+  depends_on: string[];
+  clarification: { intent: string; fields: ClarificationField[] } | null;
+  plan: { goal: string; steps: PlanStep[] } | null;
+  result: Record<string, unknown> | null;
+  task_id: string | null;
+  error_code: string | null;
+}
+
+export interface AgentTaskBundle {
+  bundle_id: string;
+  session_id: string;
+  original_request: string;
+  status: string;
+  active_item_id: string | null;
+  items: AgentBundleItem[];
+  revision: number;
+}
+
+export interface AgentTurnResponse {
+  request_id: string;
+  session_id: string;
+  bundle: AgentTaskBundle;
+  public_message: string;
+}
+
 export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;

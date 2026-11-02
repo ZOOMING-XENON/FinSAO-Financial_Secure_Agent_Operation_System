@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, uid } from '../core/api';
-import type { AgentTask, ClarificationField, ConversationMessage, SpendingSummary } from '../core/types';
+import type { AgentTask, AgentTurnResponse, ClarificationField, ConversationMessage, SpendingSummary } from '../core/types';
 import { categoryKey, monthLabel } from '../core/format';
 import { formatMoney } from '../core/money';
 import { go, useApp, useClient } from '../app/state';
@@ -64,6 +64,7 @@ export function Aegis() {
   const [messages, setMessages] = useState<Msg[]>(session.messages);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [replyTarget, setReplyTarget] = useState<{ bundleId: string; itemId: string } | null>(null);
   const [listening, setListening] = useState(false);
   // Speech recognition hears one language at a time; it starts as the UI language and the user can switch it.
   const [voiceLang, setVoiceLang] = useState<'zh-CN' | 'en-US'>(session.voiceLang || (lang === 'zh' ? 'zh-CN' : 'en-US'));
@@ -113,6 +114,7 @@ export function Aegis() {
   const renderResult = (task: AgentTask): ReactNode => {
     const r = task.result ?? {};
     const msg = task.public_message || t('aegis.done');
+    if (typeof r.reply === 'string') return r.reply;
     if (typeof r.balance === 'string') {
       return (
         <>
@@ -167,52 +169,90 @@ export function Aegis() {
       </ul>
     ) : null;
 
-  async function handleTask(task: AgentTask) {
-    if (task.status === 'COMPLETED') {
-      remember('assistant', task.public_message || 'done');
-      push({ role: 'bot', body: <>{renderResult(task)}{planSteps(task)}</> });
-      return;
-    }
-    if (task.status === 'NEEDS_CLARIFICATION') {
-      const c = (task.result?.clarification ?? null) as { intent: string; fields: ClarificationField[] } | null;
-      remember('assistant', '[CLARIFICATION] ' + (task.public_message || ''));
+  async function handleTurn(turn: AgentTurnResponse) {
+    const bundle = turn.bundle;
+    setReplyTarget(null);
+    remember('assistant', turn.public_message || 'done');
+    const active = bundle.items.find(item => item.item_id === bundle.active_item_id) ?? null;
+    const rows = (
+      <div className="steps">
+        {bundle.items.map(item => (
+          <div key={item.item_id} className="small">
+            <Icon name={item.status === 'COMPLETED' ? 'i-check' : 'i-clock'} />
+            {item.evidence} · {item.status}
+          </div>
+        ))}
+      </div>
+    );
+    const results = bundle.items
+      .filter(item => item.status === 'COMPLETED' && item.intent !== 'GENERAL_CHAT')
+      .map(item => (
+        <div key={`result-${item.item_id}`}>
+          {renderResult({
+            id: item.task_id || item.item_id,
+            status: item.status,
+            public_message: null,
+            plan: item.plan,
+            result: item.result,
+            error_code: item.error_code,
+          })}
+        </div>
+      ));
+    if (active?.clarification) {
       push({
         role: 'bot',
         body: (
           <>
-            {task.public_message}
-            {c && <ClarifyForm fields={c.fields} onSubmit={(fields, display) => send(display, { intent: c.intent, fields })} />}
+            {turn.public_message}
+            {rows}
+            {results}
+            {active.clarification.fields.length ? (
+              <ClarifyForm
+                fields={active.clarification.fields}
+                onSubmit={(fields, display) => send(display, {
+                  item_id: active.item_id,
+                  intent: active.intent,
+                  fields,
+                }, bundle.bundle_id)}
+              />
+            ) : (
+              <button className="btn" onClick={() => setReplyTarget({ bundleId: bundle.bundle_id, itemId: active.item_id })}>
+                {t('aegis.replyToTask')}
+              </button>
+            )}
           </>
         ),
       });
       return;
     }
-    if (task.status === 'WAITING_APPROVAL') {
-      remember('assistant', task.public_message || 'waiting approval');
+    if (active?.status === 'WAITING_APPROVAL' && active.task_id) {
+      const task: AgentTask = {
+        id: active.task_id,
+        status: active.status,
+        public_message: turn.public_message,
+        plan: active.plan,
+        result: active.result,
+        error_code: active.error_code,
+      };
+      push({ role: 'bot', body: <>{turn.public_message}{rows}{results}{planSteps(task)}</> });
       const op = pendingOperation(task);
-      if (!op) {
-        push({ role: 'bot', body: task.public_message || task.status });
-        return;
-      }
-      push({ role: 'bot', body: <>{task.public_message}{planSteps(task)}</> });
-      const rows: [string, string][] = [[t('shield.action'), task.plan?.goal || op.type]];
-      if (op.amount) rows.push([t('shield.amount'), formatMoney(op.amount)]);
+      if (!op) return;
+      const approvalRows: [string, string][] = [[t('shield.action'), task.plan?.goal || op.type]];
+      if (op.amount) approvalRows.push([t('shield.amount'), formatMoney(op.amount)]);
       const ref = await authorize({
         operationType: op.type,
         operationId: op.id,
         targetAccountId: op.args.source_account_id as string | undefined,
         amount: op.amount,
-        rows,
+        rows: approvalRows,
       });
       if (!ref) {
         push({ role: 'bot', body: t('aegis.declined') });
         return;
       }
-      const resumed = await api.agentResume(task.id, ref);
-      return handleTask(resumed);
+      return handleTurn(await api.agentBundleResume(bundle.bundle_id, active.item_id, ref));
     }
-    remember('assistant', task.public_message || 'failed');
-    push({ role: 'bot', body: <span style={{ color: 'var(--red)' }}>{task.public_message || task.error_code || t('common.error')}</span> });
+    push({ role: 'bot', body: <>{turn.public_message}{rows}{results}</> });
   }
 
   async function demoReply(q: string) {
@@ -250,27 +290,39 @@ export function Aegis() {
     push({ role: 'bot', body: t('aegis.offline') });
   }
 
-  async function send(raw: string, confirmation?: unknown) {
+  async function send(raw: string, confirmation?: unknown, confirmationBundleId?: string): Promise<boolean> {
     const q = raw.trim();
-    if (!q || busy) return;
+    if (!q || busy) return false;
     setText('');
     if (SENSITIVE.test(q)) {
       push({ role: 'bot', body: t('aegis.sensitive') });
-      return;
+      return false;
     }
     push({ role: 'me', body: q });
     if (INJECTION.test(q)) {
       push({ role: 'bot', body: t('aegis.injection') });
-      return;
+      return false;
     }
     const conversation = session.history.slice(-10);
     remember('user', q);
     setBusy(true);
     try {
-      if (agent === 'live') await handleTask(await api.agentTask(q, session.id, conversation, confirmation));
+      if (agent === 'live') {
+        const target = confirmation ? null : replyTarget;
+        await handleTurn(await api.agentTurn(
+          q,
+          session.id,
+          conversation,
+          confirmationBundleId || target?.bundleId,
+          confirmation,
+          target?.itemId,
+        ));
+      }
       else await demoReply(q);
+      return true;
     } catch (e) {
       push({ role: 'bot', body: <span style={{ color: 'var(--red)' }}>{t('aegis.failed', { msg: errorText(e) })}</span> });
+      return false;
     } finally {
       setBusy(false);
     }
@@ -488,6 +540,12 @@ export function Aegis() {
         <div ref={endRef} />
       </div>
 
+      {replyTarget && (
+        <div className="small" style={{ padding: '0 1rem' }}>
+          {t('aegis.replyToTask')}
+          <button type="button" className="btn" onClick={() => setReplyTarget(null)}>{t('aegis.cancelReply')}</button>
+        </div>
+      )}
       <form
         className="composer"
         onSubmit={e => {
@@ -543,12 +601,13 @@ interface SpeechRec {
   stop: () => void;
 }
 
-function ClarifyForm({ fields, onSubmit }: { fields: ClarificationField[]; onSubmit: (values: Record<string, string>, display: string) => void }) {
+function ClarifyForm({ fields, onSubmit }: { fields: ClarificationField[]; onSubmit: (values: Record<string, string>, display: string) => Promise<boolean> }) {
   const { t } = useApp();
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(fields.map(f => [f.name, f.value == null ? '' : f.input_type === 'month' ? String(f.value).slice(0, 7) : String(f.value)])),
   );
   const [done, setDone] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [optionsByField, setOptions] = useState<Record<string, { value: string; label: string }[]>>({});
 
   // The agent sometimes asks for an account without listing options; offer the user's accounts.
@@ -562,7 +621,8 @@ function ClarifyForm({ fields, onSubmit }: { fields: ClarificationField[]; onSub
       );
   }, [fields]);
 
-  const submit = () => {
+  const submit = async () => {
+    if (done || submitting) return;
     if (fields.some(f => f.required && !values[f.name]?.trim())) return;
     const out = { ...values };
     for (const f of fields) if (f.input_type === 'month' && /^\d{4}-\d{2}$/.test(out[f.name] ?? '')) out[f.name] += '-01';
@@ -574,8 +634,12 @@ function ClarifyForm({ fields, onSubmit }: { fields: ClarificationField[]; onSub
         return `${f.label}: ${options.find(o => o.value === values[f.name])?.label ?? values[f.name]}`;
       })
       .join(' · ');
-    setDone(true);
-    onSubmit(out, display || t('aegis.confirm'));
+    setSubmitting(true);
+    try {
+      if (await onSubmit(out, display || t('aegis.confirm'))) setDone(true);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -614,7 +678,7 @@ function ClarifyForm({ fields, onSubmit }: { fields: ClarificationField[]; onSub
         );
       })}
       {!done && (
-        <button className="btn primary" onClick={submit}>
+        <button className="btn primary" onClick={submit} disabled={submitting}>
           {t('aegis.confirm')}
         </button>
       )}

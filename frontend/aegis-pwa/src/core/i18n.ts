@@ -471,6 +471,8 @@ const en = {
   'aegis.offline': 'The Aegis agent is offline. In demo mode I can show balances and spending; for transfers use Payments.',
   'aegis.failed': 'Something went wrong: {msg}',
   'aegis.confirm': 'Confirm',
+  'aegis.replyToTask': 'Reply to this task',
+  'aegis.cancelReply': 'Cancel task reply',
   'aegis.declined': 'Cancelled. No money moved.',
   'aegis.balance': 'Balance',
   'aegis.done': 'Done.',
@@ -605,6 +607,8 @@ const en = {
   'err.VALIDATION_ERROR': 'Please check the details',
   'err.MFA_INVALID': 'Incorrect code',
   'err.UPSTREAM_UNAVAILABLE': 'Banking service unavailable',
+  'err.REQUEST_DEADLINE_EXCEEDED': 'Aegis took too long to respond. Please try again.',
+  'err.INVALID_BUNDLE_TRANSITION': 'This task card is no longer active. Start a new request or use the current card.',
 };
 
 export type Key = keyof typeof en;
@@ -1080,6 +1084,8 @@ const zh: Record<Key, string> = {
   'aegis.offline': 'Aegis 助手未连接。演示模式下可查询余额和支出；转账请使用“支付”。',
   'aegis.failed': '出错了：{msg}',
   'aegis.confirm': '确认',
+  'aegis.replyToTask': '回复这项任务',
+  'aegis.cancelReply': '取消回复任务',
   'aegis.declined': '已取消，资金未变动。',
   'aegis.balance': '余额',
   'aegis.done': '已完成。',
@@ -1214,6 +1220,8 @@ const zh: Record<Key, string> = {
   'err.VALIDATION_ERROR': '请检查填写内容',
   'err.MFA_INVALID': '验证码错误',
   'err.UPSTREAM_UNAVAILABLE': '银行服务不可用',
+  'err.REQUEST_DEADLINE_EXCEEDED': 'Aegis 响应超时，请重试。',
+  'err.INVALID_BUNDLE_TRANSITION': '这张任务卡片已失效。请发起新请求，或使用当前卡片。',
 };
 
 export type Lang = 'zh' | 'en';
