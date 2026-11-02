@@ -3,7 +3,7 @@ import { api } from '../core/api';
 import type { Account, Balance, Budget, BudgetStatus, SavingsPot, Subscription, Transaction, TransactionPage } from '../core/types';
 import { formatMoney, fromCents, toCents } from '../core/money';
 import { budgetView, buildNudges, currentMonth, summarize, type BudgetView, type Nudge } from '../core/insights';
-import { categoryKey, daysUntil } from '../core/format';
+import { categoryKey, daysUntil, direction } from '../core/format';
 import { go, useApp, useLoad } from '../app/state';
 import { Amount, Icon, Skeleton } from '../ui/kit';
 import { TxRow } from '../ui/TxRow';
@@ -34,6 +34,11 @@ export async function loadAccounts(): Promise<AccountWithBalance[]> {
 export async function loadRecent(_accounts: Account[], limit = 20): Promise<Transaction[]> {
   const page = await api.get<TransactionPage>('/activity', { limit });
   return page.items.slice(0, limit);
+}
+
+/** A card payment that still needs a category (sorted in the ledger). Transfers and cash are excluded. */
+export function needsCategory(tx: Transaction): boolean {
+  return !tx.cash && direction(tx) === 'out' && tx.category !== 'INTERNAL_TRANSFER' && categoryKey(tx.category) === 'UNKNOWN';
 }
 
 export async function loadBudgetViews(): Promise<BudgetView[]> {
@@ -128,6 +133,7 @@ export function Home() {
   const pic = useLoad(loadMoneyPicture);
   const cards = useLoad(() => api.get<Card[]>('/cards'));
   const nudges = useNudges(pic.data);
+  const toSort = (pic.data?.tx ?? []).filter(needsCategory).length;
   const inbox = useInbox(pic.data);
   const seen = useSeen();
   const unread = inbox.filter(x => !seen.has(x.id)).length;
@@ -242,6 +248,7 @@ export function Home() {
           </a>
           <a className="qa" href="#/ledger">
             <Icon name="i-book" />
+            {toSort > 0 && <span className="qa-badge">{t('home.toSort', { n: toSort })}</span>}
             <b>{t('home.qaRecord')}</b>
             <small>{t('home.qaRecordD')}</small>
           </a>

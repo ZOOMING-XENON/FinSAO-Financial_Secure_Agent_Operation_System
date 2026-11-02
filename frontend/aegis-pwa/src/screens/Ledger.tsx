@@ -3,9 +3,9 @@
 import { useEffect, useState } from 'react';
 import { api, uid } from '../core/api';
 import { currentMonth, monthKey, shiftMonth, type Month } from '../core/insights';
-import { categoryKey, direction, formatDate, monthLabel } from '../core/format';
+import { formatDate, monthLabel } from '../core/format';
 import { PICKABLE, type Category, type Transaction } from '../core/types';
-import { loadAccounts, loadRecent } from './Home';
+import { loadAccounts, loadRecent, needsCategory } from './Home';
 import { formatMoney, fromCents, toCents } from '../core/money';
 import type { Key } from '../core/i18n';
 import { useApp, useLoad } from '../app/state';
@@ -86,8 +86,9 @@ export function Ledger({ startRecording = false }: { startRecording?: boolean })
     }
   };
   // Card payments this month that still have no category: sorted here or in the pop-up.
-  const bank = useLoad(async () => (await loadRecent(await loadAccounts(), 200)).filter(x => direction(x) === 'out' && !x.cash && x.category !== 'INTERNAL_TRANSFER'));
-  const unsorted = (bank.data ?? []).filter(x => (x.posted_at ?? '').startsWith(monthKey(month)) && categoryKey(x.category) === 'UNKNOWN');
+  // Every card payment still without a category, newest first, whatever month is shown below.
+  const bank = useLoad(async () => (await loadRecent(await loadAccounts(), 200)).filter(needsCategory));
+  const unsorted = bank.data ?? [];
   const [sorting, setSorting] = useState<Transaction | null>(null);
   const sortAs = async (tx: Transaction, category: Category) => {
     try {
@@ -168,6 +169,40 @@ export function Ledger({ startRecording = false }: { startRecording?: boolean })
           </button>
         </section>
       )}
+      {unsorted.length > 0 && (
+        <section className="card flush">
+          <div className="card-h">
+            <h3>{t('led.toSort')}</h3>
+            <span className="badge YELLOW">{unsorted.length}</span>
+          </div>
+          <p className="mut small" style={{ margin: '0 16px 6px' }}>
+            {t('led.toSortHint')}
+          </p>
+          {unsorted.map(x => (
+            <button className="row" key={x.id} onClick={() => setSorting(x)}>
+              <span className="ico">
+                <Icon name="i-card" />
+              </span>
+              <span className="main">
+                <span className="t" style={{ display: 'block' }}>
+                  {x.description}
+                </span>
+                <span className="s" style={{ display: 'block' }}>
+                  {t('tx.card')} · {formatDate(x.posted_at, locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </span>
+              <span className="sort-side">
+                <span className="v">-{formatMoney(x.amount, x.currency)}</span>
+                <span className="chip-cat need">
+                  {t('led.categorise')}
+                  <Icon name="i-chev" />
+                </span>
+              </span>
+            </button>
+          ))}
+        </section>
+      )}
+
       <div className="cal-head">
         <button className="icon-btn" aria-label={t('trends.prev')} onClick={() => setMonth(shiftMonth(month, -1))}>
           <Icon name="i-left" />
@@ -191,34 +226,6 @@ export function Ledger({ startRecording = false }: { startRecording?: boolean })
         <Icon name="i-phone" />
         {t('led.device')}
       </p>
-
-      {unsorted.length > 0 && (
-        <section className="card flush">
-          <div className="card-h">
-            <h3>{t('led.toSort')}</h3>
-            <span className="badge YELLOW">{unsorted.length}</span>
-          </div>
-          <p className="mut small" style={{ margin: '0 16px 6px' }}>
-            {t('led.toSortHint')}
-          </p>
-          {unsorted.map(x => (
-            <button className="row" key={x.id} onClick={() => setSorting(x)}>
-              <span className="ico">
-                <Icon name="i-card" />
-              </span>
-              <span className="main">
-                <span className="t" style={{ display: 'block' }}>
-                  {x.description}
-                </span>
-                <span className="s" style={{ display: 'block' }}>
-                  {formatDate(x.posted_at, locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </span>
-              <span className="v">-{formatMoney(x.amount, x.currency)}</span>
-            </button>
-          ))}
-        </section>
-      )}
 
       <Sheet open={!!sorting} onClose={() => setSorting(null)} label={t('newtx.title')}>
         {sorting && (
