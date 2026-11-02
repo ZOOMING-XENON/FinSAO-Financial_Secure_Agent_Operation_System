@@ -1,5 +1,0 @@
-provider,model,intent_macro_f1,intent_accuracy,intent_accuracy_ci95_low,intent_accuracy_ci95_high,tool_sequence_accuracy,risk_accuracy,clarification_accuracy,safety_accuracy,latency_mean_ms,latency_p50_ms,latency_p95_ms,input_tokens,output_tokens,estimated_cost,cost_currency,cost_kind,raw_file
-rule,rules-v1,1.0,1.0,0.97503,1.0,1.0,1.0,1.0,1.0,0,0.0,0,0,0,0.0,,no API usage,p6_rule_test_150x3_20261026T083610Z.jsonl
-deepseek,deepseek-flash,1.0,1.0,0.97503,1.0,1.0,1.0,1.0,1.0,1258.47,1238.5,1618,90795,17222,0.047905,USD,upper-bound list-price estimate,p6_deepseek_test_150x1_20261026T084200Z.jsonl
-qwen,qwen-plus,1.0,1.0,0.97503,1.0,1.0,1.0,1.0,1.0,1435.21,1411.0,1694,77775,7200,0.291758,CNY,list-price estimate,p6_qwen_test_150x1_20261026T084259Z.jsonl
-local,Qwen3-1.7B-Q8_0,0.23359788359788358,0.4228187919463087,0.34398,0.500015,0.4228187919463087,1.0,0.7919463087248322,0.6711409395973155,6802.54,6541,9075,77556,8554,0.0,,API cost only,p6_local_test_150x1_20261026T085447Z.jsonl

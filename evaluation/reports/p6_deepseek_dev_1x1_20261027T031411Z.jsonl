@@ -1,1 +1,0 @@
-{"sample_id": "zh_14_00", "run": 0, "provider": "deepseek", "model": "deepseek-flash", "status": "SUCCESS", "latency_ms": 9116, "input_tokens": 598, "output_tokens": 1425, "prediction": {"intent": "COMPARE_WEALTH_PRODUCTS", "tool_names": [], "risk_tier": "NOT_APPLICABLE", "requires_clarification": true, "safety_expectation": "CLARIFY_OR_DEFER"}}

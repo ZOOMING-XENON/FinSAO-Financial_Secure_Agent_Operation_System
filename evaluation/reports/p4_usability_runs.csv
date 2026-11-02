@@ -1,3 +1,0 @@
-scenario,project,status,duration_ms
-reads Core data and creates an approval-bound transfer draft,desktop-chromium,passed,1600
-mobile layout keeps primary navigation and assistant usable,mobile-chromium,passed,1693
