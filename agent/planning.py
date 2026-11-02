@@ -465,10 +465,15 @@ class PlanVerifier:
                 raise PlanValidationError(
                     "ARGUMENT_SOURCE_MISMATCH", "every argument requires exact provenance"
                 )
-            if any(
-                source.kind == ArgumentSourceKind.MODEL_INFERRED
-                for source in step.argument_sources.values()
-            ):
+            inferred_names = {
+                name for name, source in step.argument_sources.items()
+                if source.kind == ArgumentSourceKind.MODEL_INFERRED
+            }
+            safe_query_filters = (
+                step.tool_call.tool_name in {"get_expenses", "summarize_expenses"}
+                and inferred_names.issubset({"limit", "category"})
+            )
+            if inferred_names and not safe_query_filters:
                 raise PlanValidationError(
                     "INFERRED_ARGUMENT", "model-inferred financial arguments are not executable"
                 )

@@ -417,6 +417,10 @@ class SlotTracker:
             if amount:
                 facts["amount"] = SlotFact("amount", amount, FactSource.USER_EXPLICIT)
         for name, value in intent.proposed_slots.items():
+            if intent.intent == Intent.TRANSFER and name in {
+                "amount", "currency", "source_account_id", "destination_account_id"
+            }:
+                continue
             if (
                 name in intent.required_slots
                 and name not in facts
@@ -424,5 +428,63 @@ class SlotTracker:
                 and value != ""
             ):
                 facts[name] = SlotFact(name, value, FactSource.MODEL_INFERRED)
+        if intent.intent == Intent.TRANSFER:
+            proposed_amount = intent.proposed_slots.get("amount")
+            if (
+                "amount" not in facts
+                and proposed_amount is not None
+                and not isinstance(proposed_amount, bool)
+            ):
+                try:
+                    candidate = Decimal(str(proposed_amount))
+                    if (
+                        candidate.is_finite()
+                        and 0 < candidate <= Decimal("1000000000")
+                        and candidate == candidate.quantize(Decimal("0.01"))
+                    ):
+                        facts["amount"] = SlotFact(
+                            "amount", format(candidate, ".2f"), FactSource.MODEL_INFERRED
+                        )
+                except InvalidOperation:
+                    pass
+            recipient = intent.proposed_slots.get("recipient")
+            if recipient is None:
+                recipient = intent.proposed_slots.get("beneficiary_query")
+            if (
+                "beneficiary_query" not in facts
+                and isinstance(recipient, str)
+                and 0 < len(recipient.strip()) <= 80
+            ):
+                facts["beneficiary_query"] = SlotFact(
+                    "beneficiary_query", recipient.strip(), FactSource.MODEL_INFERRED
+                )
+            if "currency" not in facts:
+                proposed_currency = intent.proposed_slots.get("currency")
+                if isinstance(proposed_currency, str) and proposed_currency.upper() in {
+                    "CNY", "USD", "EUR"
+                }:
+                    facts["currency"] = SlotFact(
+                        "currency", proposed_currency.upper(), FactSource.MODEL_INFERRED
+                    )
+                else:
+                    facts["currency"] = SlotFact(
+                        "currency", "CNY", FactSource.SYSTEM_CONSTANT
+                    )
+        if intent.intent in {Intent.TRACK_EXPENSES, Intent.SUMMARIZE_EXPENSES}:
+            proposed_limit = intent.proposed_slots.get("limit")
+            if "limit" not in facts and not isinstance(proposed_limit, bool):
+                try:
+                    limit = int(proposed_limit)  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    limit = 0
+                if 1 <= limit <= 200 and str(proposed_limit) == str(limit):
+                    facts["limit"] = SlotFact("limit", limit, FactSource.MODEL_INFERRED)
+            proposed_category = intent.proposed_slots.get("category")
+            if "category" not in facts and isinstance(proposed_category, str):
+                category = proposed_category.upper()
+                if category in EXPENSE_CATEGORIES:
+                    facts["category"] = SlotFact(
+                        "category", category, FactSource.MODEL_INFERRED
+                    )
         missing = [slot for slot in intent.required_slots if slot not in facts]
         return SlotState(facts=facts, missing=missing)

@@ -16,8 +16,10 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, s
 from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
+from sqlalchemy import create_engine
 
 from agent.beneficiary_ranking import ModelBeneficiaryRanker
+from agent.bundle_contracts import AgentTurnRequest, AgentTurnResponse, BundleResumeRequest
 from agent.capabilities import CapabilityBroker
 from agent.checkpoints import AsyncFromSyncPostgresSaver
 from agent.config import AgentSettings, get_agent_settings
@@ -28,6 +30,7 @@ from agent.contracts import (
     AgentResponseStatus,
     TrustedAgentContext,
 )
+from agent.conversation_style import ModelConversationComposer
 from agent.durable import DurableEvent, DurableTask, DurableTaskManager, ResumeRequest
 from agent.expenses import ExpenseRouter
 from agent.factory import build_model_provider
@@ -35,6 +38,7 @@ from agent.graph import build_runtime_agent_graph
 from agent.hybrid import HybridPlanner, HybridRouter
 from agent.jev_http import HttpJevAdapter
 from agent.multimedia import MultimediaProvider, MultimediaSettings, MultimediaUnavailable
+from agent.orchestrator import ConversationOrchestrator
 from agent.planning import BaselinePlanner, PlanVerifier
 from agent.privacy_broker import PrivacyBroker
 from agent.proactive import (
@@ -46,8 +50,9 @@ from agent.proactive import (
 from agent.review import PrivacyPreservingReviewer
 from agent.routing import RuleRouter
 from agent.service import AgentService
+from agent.task_decomposition import TaskDecomposer
 from agent.transfer_reasoning import ModelTransferReasoner
-from agent_persistence import SqlAlchemyTaskStore
+from agent_persistence import SqlAlchemyBundleStore, SqlAlchemyTaskStore
 from agent_tools.client import BankingHttpClient, StaticServiceAuthenticator
 from agent_tools.gateway import ToolGateway
 from agent_tools.registry import ToolRegistry
@@ -144,12 +149,28 @@ _service = AgentService(
 _task_store = SqlAlchemyTaskStore(_settings.agent_database_url)
 _runtime_graph = build_runtime_agent_graph(_service, _gateway, MemorySaver())
 _task_manager = DurableTaskManager(_service, _gateway, _task_store, _runtime_graph)
+_bundle_store = SqlAlchemyBundleStore(
+    create_engine(_settings.agent_database_url, pool_pre_ping=True)
+)
+_task_decomposer = TaskDecomposer(
+    _model_provider,
+    jev_adapter=_jev_adapter if _settings.jev_enabled else None,
+    jev_min_confidence=_settings.jev_intent_min_confidence,
+    max_injection=_settings.jev_max_injection,
+    min_in_scope=_settings.jev_min_in_scope,
+)
+_orchestrator = ConversationOrchestrator(
+    decomposer=_task_decomposer,
+    task_manager=_task_manager,
+    store=_bundle_store,
+    conversation_composer=ModelConversationComposer(_model_provider),
+)
 _proactive_engine = ProactiveEventEngine(_task_store)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    global _task_manager
+    global _orchestrator, _task_manager
     try:
         if _settings.agent_checkpoint_database_url:
             with PostgresSaver.from_conn_string(_settings.agent_checkpoint_database_url) as saver:
@@ -158,6 +179,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                     _service, _gateway, AsyncFromSyncPostgresSaver(saver)
                 )
                 _task_manager = DurableTaskManager(_service, _gateway, _task_store, graph)
+                _orchestrator = ConversationOrchestrator(
+                    decomposer=_task_decomposer,
+                    task_manager=_task_manager,
+                    store=_bundle_store,
+                    conversation_composer=ModelConversationComposer(_model_provider),
+                )
                 yield
         else:
             yield
@@ -215,6 +242,10 @@ def get_agent_service() -> AgentService:
 
 def get_task_manager() -> DurableTaskManager:
     return _task_manager
+
+
+def get_conversation_orchestrator() -> ConversationOrchestrator:
+    return _orchestrator
 
 
 def get_task_store() -> SqlAlchemyTaskStore:
@@ -357,6 +388,85 @@ async def create_task(
             manager.create(request, context),
             timeout=_settings.request_deadline_seconds,
         )
+    except TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail={"code": "REQUEST_DEADLINE_EXCEEDED"},
+        ) from None
+
+
+@app.post("/agent/bundles/turns", response_model=AgentTurnResponse)
+async def create_bundle_turn(
+    request: AgentTurnRequest,
+    orchestrator: Annotated[ConversationOrchestrator, Depends(get_conversation_orchestrator)],
+    user_id: Annotated[UUID, Depends(get_trusted_user_id)],
+    x_trace_id: Annotated[str | None, Header(alias="X-Trace-Id")] = None,
+) -> AgentTurnResponse:
+    try:
+        trace_id = UUID(x_trace_id) if x_trace_id else uuid4()
+    except ValueError:
+        trace_id = uuid4()
+    context = TrustedAgentContext(
+        authenticated_user_id=user_id,
+        session_id=request.session_id,
+        task_id=uuid4(),
+        trace_id=trace_id,
+    )
+    try:
+        return await asyncio.wait_for(
+            orchestrator.handle_turn(request, context),
+            timeout=_settings.request_deadline_seconds,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail={"code": "BUNDLE_NOT_FOUND"}) from None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_BUNDLE_TRANSITION", "message": str(exc)},
+        ) from None
+    except TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail={"code": "REQUEST_DEADLINE_EXCEEDED"},
+        ) from None
+
+
+@app.post(
+    "/agent/bundles/{bundle_id}/items/{item_id}/resume",
+    response_model=AgentTurnResponse,
+)
+async def resume_bundle_item(
+    bundle_id: UUID,
+    item_id: UUID,
+    request: BundleResumeRequest,
+    orchestrator: Annotated[ConversationOrchestrator, Depends(get_conversation_orchestrator)],
+    user_id: Annotated[UUID, Depends(get_trusted_user_id)],
+) -> AgentTurnResponse:
+    context = TrustedAgentContext(
+        authenticated_user_id=user_id,
+        session_id=uuid4(),
+        task_id=uuid4(),
+        trace_id=uuid4(),
+    )
+    try:
+        return await asyncio.wait_for(
+            orchestrator.resume_item(
+                bundle_id=bundle_id,
+                item_id=item_id,
+                authorization_reference=request.authorization_reference,
+                request_id=uuid4(),
+                context=context,
+                locale="zh-CN",
+            ),
+            timeout=_settings.request_deadline_seconds,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail={"code": "BUNDLE_NOT_FOUND"}) from None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_BUNDLE_TRANSITION", "message": str(exc)},
+        ) from None
     except TimeoutError:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,

@@ -5,8 +5,12 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Awaitable
+from datetime import datetime
 from typing import Any, Protocol
 from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+from pydantic import ValidationError
 
 from agent.beneficiary_ranking import ModelBeneficiaryRanker
 from agent.capabilities import CapabilityBroker
@@ -36,7 +40,7 @@ from agent.localization import (
 from agent.planning import PlanValidationError, PlanVerifier
 from agent.responses import SafeResponseGenerator
 from agent.routing import REQUIRED_SLOTS_BY_INTENT, Intent, IntentResult, Route
-from agent.transfer_reasoning import ModelTransferReasoner
+from agent.transfer_reasoning import ModelTransferReasoner, VerifiedBalance
 from agent_tools.contracts import ExecutionContext, ToolResult, ToolResultStatus
 
 logger = logging.getLogger(__name__)
@@ -114,17 +118,38 @@ class AgentService:
             slot_state = self._slots.from_confirmation(request.confirmation.fields, intent)
         else:
             contextual_text, active_conversation = self._active_context(request)
-            routed = self._router.route(request.message, conversation=active_conversation)
-            intent = await routed if isinstance(routed, Awaitable) else routed
+            if (
+                context.expected_intent is not None
+                and context.expected_intent != Intent.GENERAL_CHAT
+            ):
+                intent = IntentResult(
+                    intent=context.expected_intent,
+                    complexity=3,
+                    confidence=1.0,
+                    route=Route.PLANNER,
+                    reason="server-verified bundle intent",
+                    required_slots=list(REQUIRED_SLOTS_BY_INTENT.get(context.expected_intent, ())),
+                    proposed_slots=context.expected_slots,
+                )
+            else:
+                routed = self._router.route(request.message, conversation=active_conversation)
+                intent = await routed if isinstance(routed, Awaitable) else routed
             transfer_analysis = None
             if (
-                intent.intent not in {Intent.GENERAL_CHAT, Intent.UNKNOWN}
+                (
+                    intent.intent == Intent.TRANSFER
+                    or (
+                        context.expected_intent is None
+                        and intent.intent not in {Intent.GENERAL_CHAT, Intent.UNKNOWN}
+                    )
+                )
                 and self._transfer_reasoner is not None
             ):
                 transfer_analysis = await self._transfer_reasoner.analyze(
                     message=request.message,
                     conversation=request.conversation,
                     request_id=request.request_id,
+                    verified_balances=self._verified_balances(context),
                 )
                 if transfer_analysis is not None and (
                     transfer_analysis.multiple_actions
@@ -133,12 +158,24 @@ class AgentService:
                         and transfer_analysis.requires_clarification
                     )
                 ):
+                    percentage_needs_balance = (
+                        intent.intent == Intent.TRANSFER
+                        and transfer_analysis.requires_clarification
+                        and transfer_analysis.percentage_requested
+                    )
                     message = (
                         "I found multiple financial actions. Please review them separately; "
                         "no action was executed."
                         if transfer_analysis.multiple_actions and is_english(request.locale)
                         else "我识别到多项资金操作。请分别审核；目前没有执行任何操作。"
                         if transfer_analysis.multiple_actions
+                        else (
+                            "I need a verified account balance to calculate this percentage. "
+                            "No transfer was made."
+                        )
+                        if percentage_needs_balance and is_english(request.locale)
+                        else "需要先确认用于计算的账户余额，才能得出转账金额；目前没有转账。"
+                        if percentage_needs_balance
                         else "I need the bill total, number of people, and who paid before "
                         "calculating the transfer. No action was executed."
                         if is_english(request.locale)
@@ -196,6 +233,37 @@ class AgentService:
                     ),
                 )
             slot_state = self._slots.extract(contextual_text, intent)
+            if intent.intent == Intent.GET_BUDGET_STATUS and "resource_id" in slot_state.missing:
+                if not await self._resolve_budget_reference(request, context, slot_state):
+                    return AgentResponse(
+                        request_id=request.request_id,
+                        session_id=request.session_id,
+                        task_id=context.task_id,
+                        status=AgentResponseStatus.FAILED,
+                        message=(
+                            "I couldn't load your budgets. Please try again."
+                            if is_english(request.locale)
+                            else "暂时无法读取预算，请稍后重试。"
+                        ),
+                        error=AgentError(
+                            code="BUDGET_LOOKUP_FAILED",
+                            message="budget lookup failed",
+                            retryable=True,
+                        ),
+                    )
+                candidates = slot_state.facts.get("budget_candidates")
+                if candidates is not None and not candidates.value:
+                    return AgentResponse(
+                        request_id=request.request_id,
+                        session_id=request.session_id,
+                        task_id=context.task_id,
+                        status=AgentResponseStatus.COMPLETED,
+                        message=(
+                            "No matching budget was found for this month."
+                            if is_english(request.locale)
+                            else "没有找到本月匹配的预算。"
+                        ),
+                    )
             if (
                 intent.intent == Intent.TRANSFER
                 and transfer_analysis is not None
@@ -205,12 +273,39 @@ class AgentService:
                     "amount", transfer_analysis.amount, FactSource.MODEL_INFERRED
                 )
                 slot_state.missing = [name for name in slot_state.missing if name != "amount"]
+                if transfer_analysis.source_account_id is not None:
+                    slot_state.facts["source_account_id"] = SlotFact(
+                        "source_account_id",
+                        str(transfer_analysis.source_account_id),
+                        FactSource.TOOL_VERIFIED,
+                    )
+                    slot_state.missing = [
+                        name for name in slot_state.missing if name != "source_account_id"
+                    ]
+                currency_fact = slot_state.facts.get("currency")
+                if (
+                    transfer_analysis.currency is not None
+                    and (
+                        currency_fact is None
+                        or currency_fact.source == FactSource.SYSTEM_CONSTANT
+                    )
+                ):
+                    slot_state.facts["currency"] = SlotFact(
+                        "currency", transfer_analysis.currency, FactSource.TOOL_VERIFIED
+                    )
         if (
             intent.intent in {Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}
             and "expense_id" not in slot_state.facts
         ):
             await self._resolve_expense_reference(context, slot_state)
-        inferred = any(fact.source.value == "MODEL_INFERRED" for fact in slot_state.facts.values())
+        inferred = any(
+            fact.source == FactSource.MODEL_INFERRED
+            and not (
+                intent.intent in {Intent.TRACK_EXPENSES, Intent.SUMMARIZE_EXPENSES}
+                and name in {"limit", "category"}
+            )
+            for name, fact in slot_state.facts.items()
+        )
         if slot_state.missing or inferred:
             return await self._clarification_response(
                 request,
@@ -412,6 +507,16 @@ class AgentService:
         )
 
     @staticmethod
+    def _verified_balances(context: TrustedAgentContext) -> list[VerifiedBalance]:
+        balances: list[VerifiedBalance] = []
+        for raw in context.verified_balances:
+            try:
+                balances.append(VerifiedBalance.model_validate(raw))
+            except ValidationError:
+                continue
+        return balances
+
+    @staticmethod
     def _active_context(
         request: AgentRequest,
     ) -> tuple[str, list[ConversationMessage]]:
@@ -478,6 +583,55 @@ class AgentService:
         )
         slots.missing = [name for name in slots.missing if name != "expense_id"]
 
+    async def _resolve_budget_reference(
+        self, request: AgentRequest, context: TrustedAgentContext, slots: SlotState
+    ) -> bool:
+        execution_context = ExecutionContext(
+            authenticated_user_id=context.authenticated_user_id,
+            session_id=context.session_id,
+            task_id=context.task_id,
+            trace_id=context.trace_id,
+        )
+        result = await self._gateway.execute(
+            tool_name="list_budgets", arguments={}, context=execution_context
+        )
+        if result.status != ToolResultStatus.SUCCESS or result.data is None:
+            return False
+        payload = result.data.model_dump(mode="json")
+        month = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m")
+        current = [
+            item for item in payload.get("items", [])
+            if isinstance(item, dict) and str(item.get("month", "")).startswith(month)
+        ]
+        proposed_category = context.expected_slots.get("category")
+        if (
+            isinstance(proposed_category, str)
+            and proposed_category.upper() in BUDGET_CATEGORIES[request.locale]
+        ):
+            requested = [proposed_category.upper()]
+        else:
+            requested = [
+                key for key, label in BUDGET_CATEGORIES[request.locale].items()
+                if key.casefold() in request.message.casefold()
+                or label.casefold() in request.message.casefold()
+            ]
+        if requested:
+            current = [
+                item for item in current
+                if str(item.get("category", "")).casefold() in {
+                    key.casefold() for key in requested
+                }
+            ]
+        slots.facts["budget_candidates"] = SlotFact(
+            "budget_candidates", current, FactSource.TOOL_VERIFIED
+        )
+        if len(current) == 1:
+            slots.facts["resource_id"] = SlotFact(
+                "resource_id", str(current[0]["id"]), FactSource.TOOL_VERIFIED
+            )
+            slots.missing = [name for name in slots.missing if name != "resource_id"]
+        return True
+
     async def _clarification_response(
         self,
         request: AgentRequest,
@@ -515,6 +669,17 @@ class AgentService:
                 for item in candidates.value
                 if isinstance(item, dict) and item.get("id")
             ]
+        budget_candidates = slots.facts.get("budget_candidates")
+        if intent.intent == Intent.GET_BUDGET_STATUS and budget_candidates is not None:
+            options["resource_id"] = []
+            for item in budget_candidates.value:
+                category = str(item["category"])
+                label = BUDGET_CATEGORIES[request.locale].get(category, category)
+                options["resource_id"].append(
+                    ClarificationOption(
+                        value=str(item["id"]), label=f'{label} · {item["month"]}'
+                    )
+                )
         if intent.intent == Intent.CREATE_BUDGET:
             options["category"] = [
                 ClarificationOption(
@@ -620,14 +785,29 @@ class AgentService:
                         or str(item.get("nickname") or "").lower() == normalized
                     ]
                     if len(matches) == 1:
+                        matched_source = (
+                            FactSource.MODEL_INFERRED
+                            if query.source == FactSource.MODEL_INFERRED
+                            else FactSource.TOOL_VERIFIED
+                        )
                         slots.facts["destination_account_id"] = SlotFact(
                             "destination_account_id",
                             str(matches[0]["destination_account_id"]),
-                            FactSource.TOOL_VERIFIED,
+                            matched_source,
                         )
                         slots.missing = [
                             name for name in slots.missing if name != "destination_account_id"
                         ]
+                        if matched_source == FactSource.MODEL_INFERRED:
+                            display_name = localize_entity_name(
+                                matches[0].get("name"), request.locale
+                            )
+                            reason = (
+                                "It matches the person named in your request."
+                                if is_english(request.locale)
+                                else "与您这轮提到的人相符"
+                            )
+                            beneficiary_suggestion = (display_name, reason)
                 if (
                     "destination_account_id" not in slots.facts
                     and self._beneficiary_ranker is not None
@@ -671,7 +851,10 @@ class AgentService:
             field_names = list(
                 dict.fromkeys([*intent.required_slots, *slots.facts.keys()])
             )
-            field_names = [name for name in field_names if name != "beneficiary_query"]
+            field_names = [
+                name for name in field_names
+                if name not in {"beneficiary_query", "budget_candidates", "expense_candidates"}
+            ]
         fields = [
             ClarificationField(
                 name=name,
