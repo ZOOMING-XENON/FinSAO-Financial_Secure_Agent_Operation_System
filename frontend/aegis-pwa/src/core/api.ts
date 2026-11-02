@@ -1,7 +1,7 @@
 // Banking Core + Agent client. Framework-free so a React Native port can reuse it.
 // Rules: X-Trace-Id on every call, money as decimal strings, authorization refs never logged or stored.
 import { localizeDemo, mockCore, MOCK_MFA_CODE } from './mock';
-import type { AgentTask, ConversationMessage } from './types';
+import type { AgentTask, AgentTurnResponse, ConversationMessage } from './types';
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message?: string) {
@@ -158,6 +158,23 @@ class Client {
       locale: this.lang,
       ...(confirmation ? { confirmation } : {}),
     });
+  }
+
+  async agentTurn(message: string, sessionId: string, conversation: ConversationMessage[], bundleId?: string, confirmation?: unknown, replyToItemId?: string): Promise<AgentTurnResponse> {
+    return this.agentPost<AgentTurnResponse>('/agent/bundles/turns', {
+      schema_version: 'v2',
+      session_id: sessionId,
+      message,
+      conversation,
+      locale: this.lang,
+      ...(bundleId ? { bundle_id: bundleId } : {}),
+      ...(confirmation ? { confirmation } : {}),
+      ...(replyToItemId ? { reply_to_item_id: replyToItemId } : {}),
+    });
+  }
+
+  async agentBundleResume(bundleId: string, itemId: string, authorizationRef: string): Promise<AgentTurnResponse> {
+    return this.agentPost<AgentTurnResponse>(`/agent/bundles/${bundleId}/items/${itemId}/resume`, { authorization_reference: authorizationRef });
   }
 
   async agentResume(taskId: string, authorizationRef: string): Promise<AgentTask> {

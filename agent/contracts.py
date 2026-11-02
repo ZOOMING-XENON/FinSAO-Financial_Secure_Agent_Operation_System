@@ -132,6 +132,8 @@ class TrustedAgentContext:
         "session_id",
         "task_id",
         "trace_id",
+        "expected_intent",
+        "expected_slots",
     )
 
     def __init__(
@@ -142,12 +144,16 @@ class TrustedAgentContext:
         task_id: UUID,
         trace_id: UUID,
         authorization_reference: str | None = None,
+        expected_intent: Intent | None = None,
+        expected_slots: dict[str, JsonValue] | None = None,
     ) -> None:
         self.authenticated_user_id = authenticated_user_id
         self.session_id = session_id
         self.task_id = task_id
         self.trace_id = trace_id
         self.authorization_reference = authorization_reference
+        self.expected_intent = expected_intent
+        self.expected_slots = expected_slots or {}
 
 
 class ToolCall(StrictContract):

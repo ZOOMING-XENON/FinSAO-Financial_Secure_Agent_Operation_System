@@ -39,6 +39,50 @@ class AgentTaskModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class AgentTaskBundleModel(Base):
+    __tablename__ = "agent_task_bundles"
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("agent_sessions.id"), index=True)
+    original_request: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    active_item_id: Mapped[UUID | None]
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AgentBundleItemModel(Base):
+    __tablename__ = "agent_bundle_items"
+    __table_args__ = (UniqueConstraint("bundle_id", "item_key"),)
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    bundle_id: Mapped[UUID] = mapped_column(ForeignKey("agent_task_bundles.id"), index=True)
+    item_key: Mapped[str] = mapped_column(String(40))
+    intent: Mapped[str] = mapped_column(String(48))
+    evidence: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    depends_on: Mapped[list[str]] = mapped_column(JSONB)
+    proposed_slots: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    confirmed_fields: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    clarification: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    result: Mapped[Any | None] = mapped_column(JSONB)
+    task_id: Mapped[UUID | None] = mapped_column(ForeignKey("agent_tasks.id"), index=True)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AgentSessionMessageModel(Base):
+    __tablename__ = "agent_session_messages"
+    __table_args__ = (UniqueConstraint("session_id", "sequence"),)
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("agent_sessions.id"), index=True)
+    sequence: Mapped[int]
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class AgentEventModel(Base):
     __tablename__ = "agent_events"
     __table_args__ = (UniqueConstraint("task_id", "sequence"),)

@@ -115,6 +115,10 @@ class DurableTaskManager:
                         "session_id": str(context.session_id),
                         "task_id": str(context.task_id),
                         "trace_id": str(context.trace_id),
+                        "expected_intent": (
+                            context.expected_intent.value if context.expected_intent else None
+                        ),
+                        "expected_slots": context.expected_slots,
                     },
                 },
                 {"configurable": {"thread_id": str(context.task_id)}},

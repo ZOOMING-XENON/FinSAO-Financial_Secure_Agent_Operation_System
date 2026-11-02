@@ -106,6 +106,22 @@ async def test_expense_list_plan_calls_get_expenses() -> None:
 
 
 @pytest.mark.asyncio
+async def test_model_query_count_is_used_without_a_confirmation_form() -> None:
+    agent, gateway = service()
+    trusted = context()
+    trusted.expected_intent = Intent.TRACK_EXPENSES
+    trusted.expected_slots = {"limit": 3, "category": "DINING"}
+    response = await agent.handle(
+        AgentRequest(session_id=trusted.session_id, message="列出最近三笔餐饮消费"),
+        trusted,
+    )
+    assert response.status == AgentResponseStatus.COMPLETED
+    assert gateway.calls[0][0] == "get_expenses"
+    assert gateway.calls[0][1]["limit"] == 3
+    assert gateway.calls[0][1]["category"] == "DINING"
+
+
+@pytest.mark.asyncio
 async def test_expense_summary_plan_calls_summarize_expenses() -> None:
     agent, gateway = service()
     response = await agent.handle(

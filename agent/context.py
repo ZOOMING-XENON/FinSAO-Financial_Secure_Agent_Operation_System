@@ -424,5 +424,21 @@ class SlotTracker:
                 and value != ""
             ):
                 facts[name] = SlotFact(name, value, FactSource.MODEL_INFERRED)
+        if intent.intent in {Intent.TRACK_EXPENSES, Intent.SUMMARIZE_EXPENSES}:
+            proposed_limit = intent.proposed_slots.get("limit")
+            if "limit" not in facts and not isinstance(proposed_limit, bool):
+                try:
+                    limit = int(proposed_limit)  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    limit = 0
+                if 1 <= limit <= 200 and str(proposed_limit) == str(limit):
+                    facts["limit"] = SlotFact("limit", limit, FactSource.MODEL_INFERRED)
+            proposed_category = intent.proposed_slots.get("category")
+            if "category" not in facts and isinstance(proposed_category, str):
+                category = proposed_category.upper()
+                if category in EXPENSE_CATEGORIES:
+                    facts["category"] = SlotFact(
+                        "category", category, FactSource.MODEL_INFERRED
+                    )
         missing = [slot for slot in intent.required_slots if slot not in facts]
         return SlotState(facts=facts, missing=missing)
