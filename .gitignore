@@ -56,3 +56,6 @@ summary.md
 .agents/
 skills-lock.json
 docs
+.impeccable/
+.tmp/
+outputs/
