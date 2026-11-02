@@ -28,6 +28,7 @@ from agent.planning import BaselinePlanner, PlanVerifier
 from agent.providers import FakeModelProvider
 from agent.routing import Intent, IntentResult, Route, RuleRouter
 from agent.service import AgentService
+from agent.transfer_reasoning import ModelTransferReasoner
 from agent_tools.contracts import ExecutionContext, ToolResult, ToolResultStatus
 from agent_tools.registry import ToolRegistry
 from agent_tools.tools import register_default_tools
@@ -40,6 +41,124 @@ class FixtureOutput(BaseModel):
 
 class StatusOutput(BaseModel):
     status: str
+
+
+@pytest.mark.asyncio
+async def test_transfer_reasoning_verifies_equal_split_and_rejects_partial_bundle() -> None:
+    message = "我需要给小李转钱，昨晚吃海底捞418元我要和他aa"
+    reasoner = ModelTransferReasoner(
+        FakeModelProvider(
+            {
+                "multiple_actions": False,
+                "requires_clarification": False,
+                "total": "418",
+                "share_count": 2,
+                "recipient_paid": True,
+                "explanation": "418 ÷ 2 = 209，小李先付款",
+            }
+        )
+    )
+    result = await reasoner.analyze(message=message, conversation=[], request_id=uuid4())
+    assert result is not None
+    assert result.amount == "209.00"
+    assert result.requires_clarification is False
+
+    bundle = ModelTransferReasoner(
+        FakeModelProvider(
+            {
+                "multiple_actions": True,
+                "requires_clarification": False,
+                "total": "418",
+                "share_count": 2,
+                "recipient_paid": True,
+                "explanation": "还有独立的储蓄任务",
+            }
+        )
+    )
+    bundle_result = await bundle.analyze(
+        message="下周活动预留500元，同时" + message,
+        conversation=[],
+        request_id=uuid4(),
+    )
+    assert bundle_result is not None and bundle_result.multiple_actions
+
+    wrong_operand = await reasoner.analyze(
+        message="给小李转钱，昨晚吃饭500元我要和他aa",
+        conversation=[],
+        request_id=uuid4(),
+    )
+    assert wrong_operand is not None and wrong_operand.requires_clarification
+
+
+@pytest.mark.asyncio
+async def test_equal_split_prefills_verified_amount_for_review() -> None:
+    registry = ToolRegistry()
+    register_default_tools(registry, Mock())
+    gateway = ClarificationGateway()
+    service = AgentService(
+        router=RuleRouter(),
+        slots=SlotTracker(),
+        planner=BaselinePlanner(),
+        verifier=PlanVerifier(registry),
+        capabilities=CapabilityBroker(registry),
+        gateway=gateway,
+        transfer_reasoner=ModelTransferReasoner(
+            FakeModelProvider(
+                {
+                    "multiple_actions": False,
+                    "requires_clarification": False,
+                    "total": "418",
+                    "share_count": 2,
+                    "recipient_paid": True,
+                    "explanation": "418 ÷ 2 = 209",
+                }
+            )
+        ),
+    )
+    session_id = uuid4()
+    response = await service.handle(
+        AgentRequest(
+            session_id=session_id,
+            message="给小李转账，昨晚吃海底捞418元我要和他aa",
+        ),
+        _trusted_context(session_id),
+    )
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert isinstance(response.result, dict)
+    clarification = response.result["clarification"]
+    fields = {item["name"]: item for item in clarification["fields"]}
+    assert fields["amount"]["value"] == "209.00"
+    assert fields["amount"]["inferred"] is True
+    assert "418 ÷ 2 = 209.00" in response.message
+    assert gateway.calls == ["get_accounts", "list_beneficiaries"]
+
+
+@pytest.mark.asyncio
+async def test_transfer_bundle_does_not_open_partial_transfer_form() -> None:
+    service, gateway = build_service()
+    service._transfer_reasoner = ModelTransferReasoner(  # noqa: SLF001
+        FakeModelProvider(
+            {
+                "multiple_actions": True,
+                "requires_clarification": False,
+                "total": "418",
+                "share_count": 2,
+                "recipient_paid": True,
+                "explanation": "另有储蓄任务",
+            }
+        )
+    )
+    session_id = uuid4()
+    response = await service.handle(
+        AgentRequest(
+            session_id=session_id,
+            message="下周活动预留500元，同时给小李转钱，昨晚吃饭418元我要和他aa",
+        ),
+        _trusted_context(session_id),
+    )
+    assert response.status == AgentResponseStatus.NEEDS_CLARIFICATION
+    assert response.result is None
+    assert gateway.calls == []
 
 
 class CapturingGateway:

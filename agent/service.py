@@ -36,6 +36,7 @@ from agent.localization import (
 from agent.planning import PlanValidationError, PlanVerifier
 from agent.responses import SafeResponseGenerator
 from agent.routing import REQUIRED_SLOTS_BY_INTENT, Intent, IntentResult, Route
+from agent.transfer_reasoning import ModelTransferReasoner
 from agent_tools.contracts import ExecutionContext, ToolResult, ToolResultStatus
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ class AgentService:
         plan_reviewer: PlanReviewer | None = None,
         plan_review_threshold: float = 0.5,
         beneficiary_ranker: ModelBeneficiaryRanker | None = None,
+        transfer_reasoner: ModelTransferReasoner | None = None,
     ) -> None:
         self._router = router
         self._slots = slots
@@ -96,6 +98,7 @@ class AgentService:
         self._plan_reviewer = plan_reviewer
         self._plan_review_threshold = plan_review_threshold
         self._beneficiary_ranker = beneficiary_ranker
+        self._transfer_reasoner = transfer_reasoner
 
     async def handle(self, request: AgentRequest, context: TrustedAgentContext) -> AgentResponse:
         if request.confirmation is not None:
@@ -113,6 +116,44 @@ class AgentService:
             contextual_text, active_conversation = self._active_context(request)
             routed = self._router.route(request.message, conversation=active_conversation)
             intent = await routed if isinstance(routed, Awaitable) else routed
+            transfer_analysis = None
+            if (
+                intent.intent not in {Intent.GENERAL_CHAT, Intent.UNKNOWN}
+                and self._transfer_reasoner is not None
+            ):
+                transfer_analysis = await self._transfer_reasoner.analyze(
+                    message=request.message,
+                    conversation=request.conversation,
+                    request_id=request.request_id,
+                )
+                if transfer_analysis is not None and (
+                    transfer_analysis.multiple_actions
+                    or (
+                        intent.intent == Intent.TRANSFER
+                        and transfer_analysis.requires_clarification
+                    )
+                ):
+                    message = (
+                        "I found multiple financial actions. Please review them separately; "
+                        "no action was executed."
+                        if transfer_analysis.multiple_actions and is_english(request.locale)
+                        else "我识别到多项资金操作。请分别审核；目前没有执行任何操作。"
+                        if transfer_analysis.multiple_actions
+                        else "I need the bill total, number of people, and who paid before "
+                        "calculating the transfer. No action was executed."
+                        if is_english(request.locale)
+                        else (
+                            "请明确账单总额、分摊人数及谁先付款，再计算转账额；"
+                            "目前没有执行任何操作。"
+                        )
+                    )
+                    return AgentResponse(
+                        request_id=request.request_id,
+                        session_id=request.session_id,
+                        task_id=context.task_id,
+                        status=AgentResponseStatus.NEEDS_CLARIFICATION,
+                        message=message,
+                    )
             if intent.intent == Intent.CORRECT_EXPENSE_CATEGORY:
                 return AgentResponse(
                     request_id=request.request_id,
@@ -155,6 +196,15 @@ class AgentService:
                     ),
                 )
             slot_state = self._slots.extract(contextual_text, intent)
+            if (
+                intent.intent == Intent.TRANSFER
+                and transfer_analysis is not None
+                and transfer_analysis.amount is not None
+            ):
+                slot_state.facts["amount"] = SlotFact(
+                    "amount", transfer_analysis.amount, FactSource.MODEL_INFERRED
+                )
+                slot_state.missing = [name for name in slot_state.missing if name != "amount"]
         if (
             intent.intent in {Intent.UPDATE_EXPENSE, Intent.DELETE_EXPENSE}
             and "expense_id" not in slot_state.facts
@@ -162,7 +212,17 @@ class AgentService:
             await self._resolve_expense_reference(context, slot_state)
         inferred = any(fact.source.value == "MODEL_INFERRED" for fact in slot_state.facts.values())
         if slot_state.missing or inferred:
-            return await self._clarification_response(request, context, intent, slot_state)
+            return await self._clarification_response(
+                request,
+                context,
+                intent,
+                slot_state,
+                transfer_calculation=(
+                    transfer_analysis.calculation
+                    if request.confirmation is None and transfer_analysis is not None
+                    else None
+                ),
+            )
         try:
             actions = self._capabilities.allowed_actions(context=context, intent=intent.intent)
             planned = self._planner.create(
@@ -424,6 +484,7 @@ class AgentService:
         context: TrustedAgentContext,
         intent: IntentResult,
         slots: SlotState,
+        transfer_calculation: str | None = None,
     ) -> AgentResponse:
         labels = FIELD_LABELS[request.locale]
         input_types = {
@@ -651,6 +712,12 @@ class AgentService:
                     "asks you to copy an internal UUID."
                     if is_english(request.locale)
                     else "请检查付款账户，并选择以前保存的收款人；系统不会要求你复制内部 UUID。"
+                )
+            if transfer_calculation is not None:
+                message = (
+                    f"Calculated share: {transfer_calculation}. {message}"
+                    if is_english(request.locale)
+                    else f"平摊金额：{transfer_calculation}。{message}"
                 )
         elif inferred_labels:
             suffix = (

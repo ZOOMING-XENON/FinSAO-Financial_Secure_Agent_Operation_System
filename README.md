@@ -1,4 +1,15 @@
-# Aegis：让银行智能体的执行有据可查
+<div align="center">
+  <img src="image.png" alt="Aegis Logo" width="160" />
+
+  <h1>Aegis</h1>
+
+  <p>让银行智能体的执行有据可查 —— 面向比赛与原型验证的模拟银行系统</p>
+
+  <p>
+    <img alt="Python" src="https://img.shields.io/badge/Python-3.12-blue" />
+    <img alt="Node" src="https://img.shields.io/badge/Node-22.12+-green" />
+  </p>
+</div>
 
 Aegis 是用于比赛和原型验证的模拟银行系统。用户可以在页面上直接办理结构化业务，也可以用文字或语音表达需求。自然语言进入 Agent 后，模型提出意图、参数和计划；真正的账户事实、审批规则与资金变动由独立的 Banking Core 核验和执行。仓库使用虚构用户与资金，不连接真实支付网络。
 

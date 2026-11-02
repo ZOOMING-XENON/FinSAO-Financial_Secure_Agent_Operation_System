@@ -46,6 +46,7 @@ from agent.proactive import (
 from agent.review import PrivacyPreservingReviewer
 from agent.routing import RuleRouter
 from agent.service import AgentService
+from agent.transfer_reasoning import ModelTransferReasoner
 from agent_persistence import SqlAlchemyTaskStore
 from agent_tools.client import BankingHttpClient, StaticServiceAuthenticator
 from agent_tools.gateway import ToolGateway
@@ -138,6 +139,7 @@ _service = AgentService(
     ),
     plan_review_threshold=_settings.jev_plan_review_min,
     beneficiary_ranker=ModelBeneficiaryRanker(_model_provider),
+    transfer_reasoner=ModelTransferReasoner(_model_provider),
 )
 _task_store = SqlAlchemyTaskStore(_settings.agent_database_url)
 _runtime_graph = build_runtime_agent_graph(_service, _gateway, MemorySaver())
