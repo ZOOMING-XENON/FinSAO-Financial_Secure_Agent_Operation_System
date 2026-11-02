@@ -1,6 +1,6 @@
 # Aegis: Your money's smart shield
 
-The mobile front end for FinSAO, built as a **React + TypeScript PWA**. The same build ships as native **iOS and Android** apps through **Capacitor**.
+The mobile front end for Aegis, built as a **React + TypeScript PWA**. The same build ships as native **iOS and Android** apps through **Capacitor**.
 
 ![Aegis screens](docs/screens.png)
 
